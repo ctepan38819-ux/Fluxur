@@ -1,0 +1,8 @@
+{
+  "name": "Fluxur Messenger",
+  "description": "Premium AI-powered messenger with personalized assistant features, persistent user profiles, and customizable themes.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
