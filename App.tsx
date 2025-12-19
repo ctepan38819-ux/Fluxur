@@ -6,29 +6,35 @@ import { translations } from './translations';
 import { chatWithAssistant, summarizeConversation } from './geminiService';
 
 // --- Gun.js Global Instance ---
-// Расширенный список стабильных узлов для надежной синхронизации P2P
 const gun = (window as any).Gun([
   'https://gun-manhattan.herokuapp.com/gun',
-  'https://gun-relay.herokuapp.com/gun',
   'https://relay.peer.ooo/gun',
   'https://gun-us-west.herokuapp.com/gun',
-  'https://gun-eu-west.herokuapp.com/gun'
+  'https://gun-eu-west.herokuapp.com/gun',
+  'https://fluxur-relay-p2p.herokuapp.com/gun',
+  'https://peer.wall.org/gun'
 ]);
-const db = gun.get('fluxur_messenger_v3');
+const db = gun.get('fluxur_v5_global');
 
-// --- Default Avatar SVG ---
 const DEFAULT_AVATAR = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTAwIDEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2I5YmRiZCIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNDAiIHI9IjIxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48cGF0aCBkPSJNMjAgOTAgQzIwIDYwIDgwIDYwIDgwIDkwIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48L3N2Zz4=";
 
-const AI_USER: User = {
-  id: 'fluxur-ai',
-  name: 'Fluxur AI',
-  login: 'fluxai',
-  avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=fluxai',
-  status: 'online',
-  isAI: true
+const DEVELOPER_LOGIN = 'stephan_rogovoy';
+
+const THEMES = {
+  dark: 'bg-slate-950 text-slate-100',
+  light: 'bg-slate-50 text-slate-900',
+  midnight: 'bg-black text-indigo-400',
+  forest: 'bg-emerald-950 text-emerald-100',
+  sunset: 'bg-orange-950 text-orange-100'
 };
 
-const DEVELOPER_LOGIN = 'stephan_rogovoy';
+const NAV_THEMES = {
+  dark: 'bg-slate-900 border-slate-800',
+  light: 'bg-white border-slate-200',
+  midnight: 'bg-zinc-950 border-indigo-900',
+  forest: 'bg-green-950 border-emerald-900',
+  sunset: 'bg-red-950 border-orange-900'
+};
 
 export default function App() {
   const [activeView, setActiveView] = useState<FluxurView>(FluxurView.AUTH);
@@ -37,12 +43,11 @@ export default function App() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
   const [isSyncing, setIsSyncing] = useState(true);
+  const [showModModal, setShowModModal] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const profileAvatarRef = useRef<HTMLInputElement>(null);
 
   const [newHandle, setNewHandle] = useState('');
   const [chatSearchQuery, setChatSearchQuery] = useState('');
@@ -52,9 +57,8 @@ export default function App() {
   const [authForm, setAuthForm] = useState({ name: '', login: '', password: '', avatar: DEFAULT_AVATAR });
   const [authError, setAuthError] = useState('');
 
-  // --- Global Synchronization Logic ---
+  // --- Global Synchronization ---
   useEffect(() => {
-    // Подгрузка пользователей для быстрого входа
     db.get('users').map().on((data: any) => {
       if (data && data.id) {
         setRegisteredUsers(prev => {
@@ -65,74 +69,64 @@ export default function App() {
       }
     });
 
-    // Синхронизация чатов
-    db.get('chats').map().on((data: any) => {
+    db.get('chats').map().on((data: any, id: string) => {
       if (data && data.id) {
         try {
           const parsedChat: Chat = {
             ...data,
             participants: JSON.parse(data.participants || '[]'),
+            bannedUsers: JSON.parse(data.bannedUsers || '{}'),
             messages: JSON.parse(data.messages || '[]')
           };
           setChats(prev => {
             const filtered = prev.filter(c => c.id !== parsedChat.id);
             return [...filtered, parsedChat];
           });
-        } catch (e) {
-          console.error("Failed to parse chat data", e);
-        }
+        } catch (e) { console.error("Parse error", e); }
+      } else if (data === null) {
+        setChats(prev => prev.filter(c => c.id !== id));
       }
     });
 
-    // Восстановление сессии
-    const savedSession = localStorage.getItem('fluxur_session_v3');
+    const savedSession = localStorage.getItem('fluxur_session_v5');
     if (savedSession) {
       setCurrentUser(JSON.parse(savedSession));
       setActiveView(FluxurView.CHATS);
     }
-
-    // Таймаут для индикатора синхронизации
-    const timer = setTimeout(() => setIsSyncing(false), 3000);
-    return () => clearTimeout(timer);
+    setTimeout(() => setIsSyncing(false), 3000);
   }, []);
 
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('fluxur_session_v3', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('fluxur_session_v3');
-    }
-  }, [currentUser]);
-
-  const lang = currentUser?.language || 'ru';
-  const t = (key: keyof typeof translations['ru']) => (translations[lang] || translations['ru'])[key] || key;
+  const langCode = currentUser?.language || 'ru';
+  const t = (key: string) => {
+    const set = translations[langCode] || translations['en'];
+    return set[key] || key;
+  };
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
 
   const myChats = useMemo(() => {
     if (!currentUser) return [];
-    return chats.filter(c => c.participants.includes(currentUser.id));
+    return chats.filter(c => {
+      if (c.isBlocked && currentUser.role !== 'developer') return false;
+      const isParticipant = c.participants.includes(currentUser.id);
+      const banExpiry = c.bannedUsers?.[currentUser.id] || 0;
+      return isParticipant && banExpiry < Date.now();
+    });
   }, [chats, currentUser]);
 
   const searchResults = useMemo(() => {
     const q = chatSearchQuery.toLowerCase().trim();
     if (!q) return myChats;
-    return myChats.filter(c => 
-      c.name.toLowerCase().includes(q) || (c.handle && c.handle.toLowerCase().includes(q))
-    );
+    return myChats.filter(c => c.name.toLowerCase().includes(q) || c.handle?.toLowerCase().includes(q));
   }, [myChats, chatSearchQuery]);
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setAuthForm(prev => ({ ...prev, avatar: reader.result as string }));
+      reader.readAsDataURL(file);
     }
-  }, [activeChat?.messages, isTyping]);
-
-  const updateCurrentUser = (updates: Partial<User>) => {
-    if (!currentUser) return;
-    const updatedUser = { ...currentUser, ...updates };
-    setCurrentUser(updatedUser);
-    db.get('users').get(currentUser.id).put(updates);
   };
 
   const handleAuth = async () => {
@@ -145,12 +139,11 @@ export default function App() {
         return;
       }
 
-      // Проверка существования логина через глобальный индекс
       db.get('aliases').get(normalizedLogin).once((userId: string) => {
         if (userId) {
           setAuthError(t('auth_err_taken'));
         } else {
-          const isDev = normalizedLogin === DEVELOPER_LOGIN.toLowerCase();
+          const isDev = normalizedLogin === DEVELOPER_LOGIN;
           const newUser: User = {
             id: Math.random().toString(36).substr(2, 9),
             name: authForm.name,
@@ -158,243 +151,148 @@ export default function App() {
             password: authForm.password,
             avatar: authForm.avatar || DEFAULT_AVATAR,
             status: 'online',
-            isPremium: isDev, 
-            premiumStatus: isDev ? 'active' : 'none',
+            isPremium: isDev,
             role: isDev ? 'developer' : 'user',
             theme: 'dark',
             language: 'ru',
             isBlocked: false
           };
           
-          db.get('users').get(newUser.id).put(newUser);
-          db.get('aliases').get(normalizedLogin).put(newUser.id); // Создаем глобальный индекс
-          setCurrentUser(newUser);
-          setActiveView(FluxurView.CHATS);
+          db.get('users').get(newUser.id).put(newUser, (ack: any) => {
+            if (!ack.err) {
+              db.get('aliases').get(normalizedLogin).put(newUser.id);
+              setCurrentUser(newUser);
+              localStorage.setItem('fluxur_session_v5', JSON.stringify(newUser));
+              setActiveView(FluxurView.CHATS);
+            }
+          });
         }
       });
     } else {
-      // Поиск пользователя через индекс алиасов для кросс-девайс входа
       db.get('aliases').get(normalizedLogin).once((userId: string) => {
         if (userId) {
           db.get('users').get(userId).once((user: any) => {
             if (user && user.password === authForm.password) {
-              if (user.isBlocked) {
+              if (user.isBlocked && normalizedLogin !== DEVELOPER_LOGIN) {
                 setAuthError(t('auth_err_blocked'));
                 return;
               }
               setCurrentUser(user);
+              localStorage.setItem('fluxur_session_v5', JSON.stringify(user));
               setActiveView(FluxurView.CHATS);
-              initAIChat(user);
             } else {
               setAuthError(t('auth_err_invalid'));
             }
           });
         } else {
-          // Если индекс не сработал (редко), ищем в локальном списке
-          const localUser = registeredUsers.find(u => u.login.toLowerCase() === normalizedLogin && u.password === authForm.password);
-          if (localUser) {
-            setCurrentUser(localUser);
-            setActiveView(FluxurView.CHATS);
-          } else {
-            setAuthError(t('auth_err_invalid'));
-          }
+          setAuthError(t('auth_err_invalid'));
         }
       });
     }
   };
 
-  const initAIChat = (user: User) => {
-    const aiChatId = `ai-${user.id}`;
-    if (!chats.find(c => c.id === aiChatId)) {
-      const newAiChat: Chat = {
-        id: aiChatId,
-        name: 'Fluxur AI',
-        type: 'ai',
-        participants: [user.id, AI_USER.id],
-        messages: [{ 
-          id: 'welcome', 
-          senderId: AI_USER.id, 
-          senderName: AI_USER.name,
-          text: t('ai_welcome').replace('{name}', user.name), 
-          timestamp: new Date() 
-        }],
-        creatorId: 'system'
-      };
-      db.get('chats').get(newAiChat.id).put({
-        ...newAiChat,
-        participants: JSON.stringify(newAiChat.participants),
-        messages: JSON.stringify(newAiChat.messages)
-      });
-    }
+  const updateSetting = (key: keyof User, value: any) => {
+    if (!currentUser) return;
+    const updated = { ...currentUser, [key]: value };
+    setCurrentUser(updated);
+    localStorage.setItem('fluxur_session_v5', JSON.stringify(updated));
+    db.get('users').get(currentUser.id).put({ [key]: value });
   };
 
-  const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>, isProfileUpdate: boolean = false) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64 = reader.result as string;
-      if (isProfileUpdate) {
-        updateCurrentUser({ avatar: base64 });
-      } else {
-        setAuthForm(prev => ({ ...prev, avatar: base64 }));
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleSendMessage = useCallback(async (file?: FileAttachment) => {
-    if ((!inputText.trim() && !file) || !currentUser || !activeChat) return;
-    if (activeChat.isBlocked) return;
-
-    const currentText = inputText;
-    const currentChatId = activeChat.id;
+  const handleSendMessage = useCallback(async () => {
+    if (!inputText.trim() || !currentUser || !activeChat) return;
     const newMessage: Message = {
       id: Date.now().toString(),
       senderId: currentUser.id,
       senderName: currentUser.name,
-      text: currentText,
-      timestamp: new Date(),
-      file: file
+      text: inputText,
+      timestamp: new Date()
     };
-
     const updatedMessages = [...activeChat.messages, newMessage];
-    db.get('chats').get(currentChatId).put({
+    db.get('chats').get(activeChat.id).put({
       messages: JSON.stringify(updatedMessages),
-      lastMessage: file ? `File: ${file.name}` : currentText
+      lastMessage: inputText
     });
-
     setInputText('');
-
-    if (activeChat.type === 'ai' && !file) {
-      setIsTyping(true);
-      try {
-        const response = await chatWithAssistant(currentText, activeChat.messages);
-        const aiMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          senderId: AI_USER.id,
-          senderName: AI_USER.name,
-          text: response,
-          timestamp: new Date(),
-          isAiGenerated: true
-        };
-        const messagesWithAi = [...updatedMessages, aiMessage];
-        db.get('chats').get(currentChatId).put({
-          messages: JSON.stringify(messagesWithAi),
-          lastMessage: response
-        });
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setIsTyping(false);
-      }
-    }
   }, [inputText, activeChat, currentUser]);
+
+  const adminBlockUser = (uId: string, block: boolean) => {
+    db.get('users').get(uId).put({ isBlocked: block });
+  };
+
+  const adminBlockChat = (cId: string, block: boolean) => {
+    db.get('chats').get(cId).put({ isBlocked: block });
+  };
+
+  const handleBanUser = (targetUserId: string, durationMs: number) => {
+    if (!activeChat || !currentUser || activeChat.creatorId !== currentUser.id) return;
+    const expiry = Date.now() + durationMs;
+    const updatedBanned = { ...(activeChat.bannedUsers || {}), [targetUserId]: expiry };
+    const updatedParticipants = activeChat.participants.filter(id => id !== targetUserId);
+    db.get('chats').get(activeChat.id).put({
+      bannedUsers: JSON.stringify(updatedBanned),
+      participants: JSON.stringify(updatedParticipants)
+    });
+  };
 
   const handleCreateChat = () => {
     if (!newName.trim() || !currentUser || !showCreateModal) return;
+    const cid = Math.random().toString(36).substr(2, 9);
     const newChat: Chat = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: cid,
       name: newName.trim(),
       handle: newHandle ? `@${newHandle.replace('@', '')}` : undefined,
       type: showCreateModal,
       participants: [currentUser.id],
+      bannedUsers: {},
       messages: [],
       creatorId: currentUser.id
     };
-    
-    db.get('chats').get(newChat.id).put({
+    db.get('chats').get(cid).put({
       ...newChat,
       participants: JSON.stringify(newChat.participants),
+      bannedUsers: JSON.stringify(newChat.bannedUsers),
       messages: JSON.stringify(newChat.messages)
     });
-
-    setActiveChatId(newChat.id);
+    setActiveChatId(cid);
     setShowCreateModal(null);
     setNewName('');
     setNewHandle('');
   };
 
-  const isModerator = currentUser?.role === 'developer' || currentUser?.role === 'admin';
+  const currentThemeClass = THEMES[currentUser?.theme || 'dark'];
+  const currentNavTheme = NAV_THEMES[currentUser?.theme || 'dark'];
 
   if (activeView === FluxurView.AUTH) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen w-screen bg-slate-950 p-6 font-inter text-white">
-        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 relative overflow-hidden">
-          <div className="flex flex-col items-center mb-8 text-center relative z-10">
-            <ICONS.Logo className="w-20 h-20 mb-4 drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]" />
-            <h1 className="text-3xl font-outfit font-bold">{t('appName')}</h1>
-            <p className="text-slate-400 text-sm mt-1">{t('tagline')}</p>
+      <div className="flex items-center justify-center h-screen w-screen bg-slate-950 p-6 text-white overflow-hidden">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-[3rem] p-10 shadow-2xl animate-in zoom-in-95">
+          <div className="flex flex-col items-center mb-10 text-center">
+            <ICONS.Logo className="w-20 h-20 mb-4" />
+            <h1 className="text-4xl font-outfit font-black tracking-tight">{t('appName')}</h1>
+            <p className="text-slate-400 text-sm mt-2">{t('tagline')}</p>
           </div>
-          
-          <div className="space-y-6 relative z-10">
+          <div className="space-y-4">
             {authMode === 'register' && (
-              <div className="flex flex-col items-center mb-2">
-                <input type="file" ref={avatarInputRef} className="hidden" accept="image/*" onChange={(e) => handleAvatarSelect(e)} />
-                <div 
-                  onClick={(e) => { e.stopPropagation(); avatarInputRef.current?.click(); }} 
-                  className="w-24 h-24 rounded-full border-4 border-slate-800 bg-slate-800 flex items-center justify-center overflow-hidden cursor-pointer hover:border-indigo-500 transition-all group relative z-50"
-                >
-                  <img src={authForm.avatar} className="w-full h-full object-cover" alt="Avatar Preview" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                    <ICONS.Plus className="w-8 h-8 text-white" />
-                  </div>
+              <div className="flex flex-col items-center mb-4">
+                <input type="file" ref={avatarInputRef} className="hidden" accept="image/*" onChange={handleAvatarSelect} />
+                <div onClick={() => avatarInputRef.current?.click()} className="w-24 h-24 rounded-full border-2 border-slate-700 bg-slate-800 flex items-center justify-center overflow-hidden cursor-pointer">
+                  <img src={authForm.avatar} className="w-full h-full object-cover" alt="Avatar" />
                 </div>
-                <p className="text-[10px] text-slate-500 uppercase font-black mt-2 tracking-widest">{t('auth_avatar_select')}</p>
               </div>
             )}
-            
-            <div className="space-y-4 relative z-10">
-              {authMode === 'register' && (
-                <input 
-                  type="text" 
-                  placeholder={t('auth_name')} 
-                  className="w-full bg-slate-800/80 border border-slate-700 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white relative z-10" 
-                  value={authForm.name} 
-                  onChange={e => setAuthForm({...authForm, name: e.target.value})} 
-                />
-              )}
-              
-              <input 
-                type="text" 
-                placeholder={t('auth_login')} 
-                className="w-full bg-slate-800/80 border border-slate-700 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white relative z-10" 
-                value={authForm.login} 
-                onChange={e => setAuthForm({...authForm, login: e.target.value})} 
-              />
-              
-              <input 
-                type="password" 
-                placeholder={t('auth_pass')} 
-                className="w-full bg-slate-800/80 border border-slate-700 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white relative z-10" 
-                value={authForm.password} 
-                onChange={e => setAuthForm({...authForm, password: e.target.value})} 
-              />
-            </div>
-
-            {authError && <p className="text-red-400 text-xs text-center font-medium">{authError}</p>}
-            
-            <button 
-              onClick={handleAuth} 
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all active:scale-95 relative z-10"
-            >
+            {authMode === 'register' && (
+              <input type="text" placeholder={t('auth_name')} className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3.5 px-4 outline-none focus:ring-2 focus:ring-indigo-500" value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})} />
+            )}
+            <input type="text" placeholder={t('auth_login')} className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3.5 px-4 outline-none focus:ring-2 focus:ring-indigo-500" value={authForm.login} onChange={e => setAuthForm({...authForm, login: e.target.value})} />
+            <input type="password" placeholder={t('auth_pass')} className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3.5 px-4 outline-none focus:ring-2 focus:ring-indigo-500" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
+            {authError && <p className="text-red-400 text-xs text-center font-bold">{authError}</p>}
+            <button onClick={handleAuth} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl transition-all shadow-xl active:scale-95">
               {authMode === 'login' ? t('auth_btn_login') : t('auth_btn_register')}
             </button>
-            
-            <div className="flex flex-col gap-2 items-center relative z-10">
-              <p className="text-slate-500 text-xs cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => {
-                setAuthMode(authMode === 'login' ? 'register' : 'login');
-                setAuthError('');
-              }}>
-                {authMode === 'login' ? t('auth_switch_to_reg') : t('auth_switch_to_login')}
-              </p>
-              {isSyncing && (
-                <div className="flex items-center gap-2 mt-2">
-                  <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                  <span className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Fluxur Syncing...</span>
-                </div>
-              )}
-            </div>
+            <p className="text-slate-500 text-xs text-center cursor-pointer hover:text-indigo-400 mt-4" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
+              {authMode === 'login' ? t('auth_switch_to_reg') : t('auth_switch_to_login')}
+            </p>
           </div>
         </div>
       </div>
@@ -402,127 +300,209 @@ export default function App() {
   }
 
   return (
-    <div className={`flex h-screen w-screen overflow-hidden font-inter transition-colors duration-300 ${currentUser?.theme === 'light' ? 'bg-white text-slate-900' : (currentUser?.theme === 'midnight' ? 'bg-black text-indigo-100' : 'bg-slate-950 text-slate-100')}`}>
-      <nav className={`w-20 border-r flex flex-col items-center py-8 gap-6 shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentUser?.theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-900 border-slate-800'}`}>
-        <div className="w-12 h-12 cursor-pointer hover:scale-110 transition-transform mb-4" onClick={() => setActiveView(FluxurView.CHATS)}><ICONS.Logo /></div>
-        <button onClick={() => setActiveView(FluxurView.CHATS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.CHATS ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`} title={t('sidebar_chats')}><ICONS.Message /></button>
-        <button onClick={() => setActiveView(FluxurView.PROFILE)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.PROFILE ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`} title={t('sidebar_profile')}><ICONS.User /></button>
-        {isModerator && <button onClick={() => setActiveView(FluxurView.ADMIN)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.ADMIN ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/20' : 'text-slate-500 hover:text-amber-400'}`} title={t('sidebar_admin')}><ICONS.Sparkles /></button>}
+    <div className={`flex h-screen w-screen overflow-hidden font-inter transition-all duration-500 ${currentThemeClass}`}>
+      <nav className={`w-20 border-r flex flex-col items-center py-8 gap-8 shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentNavTheme}`}>
+        <div className="w-12 h-12 cursor-pointer hover:scale-110 mb-4" onClick={() => setActiveView(FluxurView.CHATS)}><ICONS.Logo /></div>
+        <button onClick={() => setActiveView(FluxurView.CHATS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.CHATS ? 'bg-indigo-600 text-white shadow-lg' : 'opacity-40 hover:opacity-100'}`}><ICONS.Message /></button>
+        <button onClick={() => setActiveView(FluxurView.PROFILE)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.PROFILE ? 'bg-indigo-600 text-white shadow-lg' : 'opacity-40 hover:opacity-100'}`}><ICONS.User /></button>
+        {currentUser?.role === 'developer' && (
+          <button onClick={() => setActiveView(FluxurView.ADMIN)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.ADMIN ? 'bg-amber-500 text-white shadow-lg' : 'opacity-40 hover:opacity-100'}`}><ICONS.Sparkles /></button>
+        )}
         <div className="flex-1" />
-        <button onClick={() => setActiveView(FluxurView.SETTINGS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.SETTINGS ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`} title={t('sidebar_settings')}><ICONS.Settings /></button>
+        <button onClick={() => setActiveView(FluxurView.SETTINGS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.SETTINGS ? 'bg-indigo-600 text-white shadow-lg' : 'opacity-40 hover:opacity-100'}`}><ICONS.Settings /></button>
       </nav>
 
       <div className="flex-1 flex overflow-hidden">
         {activeView === FluxurView.CHATS ? (
           <>
-            <aside className={`w-full md:w-80 border-r flex flex-col shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentUser?.theme === 'light' ? 'bg-slate-50' : 'bg-slate-900/50'}`}>
-              <div className="p-6 h-full flex flex-col">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-outfit font-bold">{t('appName')}</h2>
+            <aside className={`w-full md:w-80 border-r flex flex-col shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentNavTheme}`}>
+              <div className="p-6 flex flex-col h-full">
+                <div className="flex items-center justify-between mb-8">
+                  <h2 className="text-2xl font-black">{t('appName')}</h2>
                   <div className="flex gap-2">
-                    <button onClick={() => setShowCreateModal('group')} className="p-2 hover:bg-slate-800 rounded-lg text-indigo-400 transition-colors"><ICONS.Plus className="w-4 h-4" /></button>
-                    <button onClick={() => setShowCreateModal('channel')} className="p-2 hover:bg-slate-800 rounded-lg text-emerald-400 transition-colors"><ICONS.Message className="w-4 h-4" /></button>
+                    <button onClick={() => setShowCreateModal('group')} className="p-2 hover:bg-indigo-500/10 rounded-xl text-indigo-400"><ICONS.Plus className="w-5 h-5" /></button>
+                    <button onClick={() => setShowCreateModal('channel')} className="p-2 hover:bg-emerald-500/10 rounded-xl text-emerald-400"><ICONS.Message className="w-5 h-5" /></button>
                   </div>
                 </div>
                 <div className="relative mb-6">
                   <ICONS.Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                  <input type="text" placeholder={t('chat_search')} className={`w-full text-xs py-2.5 pl-10 pr-4 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${currentUser?.theme === 'light' ? 'bg-slate-100 border-slate-200 text-slate-900' : 'bg-slate-800 border-slate-700 text-slate-100'}`} value={chatSearchQuery} onChange={(e) => setChatSearchQuery(e.target.value)} />
+                  <input type="text" placeholder={t('chat_search')} className="w-full text-xs py-3 pl-10 pr-4 rounded-xl bg-slate-800/20 border border-slate-700 outline-none focus:ring-2 focus:ring-indigo-500" value={chatSearchQuery} onChange={(e) => setChatSearchQuery(e.target.value)} />
                 </div>
-                <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-                  {searchResults.length > 0 ? searchResults.map(chat => (
-                    <div key={chat.id} onClick={() => setActiveChatId(chat.id)} className={`p-4 rounded-2xl cursor-pointer transition-all border ${activeChatId === chat.id ? 'bg-indigo-600/10 border-indigo-500/30' : 'hover:bg-indigo-500/5 border-transparent'}`}>
-                      <span className="font-bold text-sm truncate block">{chat.name}</span>
-                      <p className="text-xs text-slate-500 truncate">{chat.lastMessage || t('msg_no_messages')}</p>
+                <div className="flex-1 overflow-y-auto space-y-2">
+                  {searchResults.map(chat => (
+                    <div key={chat.id} onClick={() => setActiveChatId(chat.id)} className={`p-4 rounded-2xl cursor-pointer transition-all border ${activeChatId === chat.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl' : 'hover:bg-indigo-500/5 border-transparent'}`}>
+                      <div className="flex justify-between items-start">
+                        <span className="font-bold text-sm truncate block">{chat.name}</span>
+                        {chat.isBlocked && <span className="text-[8px] bg-red-600 px-1 rounded">BLOCKED</span>}
+                      </div>
+                      <p className={`text-xs truncate mt-1 ${activeChatId === chat.id ? 'text-indigo-100' : 'text-slate-500'}`}>{chat.lastMessage || t('msg_no_messages')}</p>
                     </div>
-                  )) : (
-                    <p className="text-center text-slate-500 text-xs mt-10">{t('chat_empty')}</p>
-                  )}
+                  ))}
                 </div>
               </div>
             </aside>
             <main className={`flex-1 flex-col ${activeChatId ? 'flex' : 'hidden md:flex'}`}>
               {activeChat ? (
                 <>
-                  <header className="h-20 border-b px-4 md:px-8 flex items-center justify-between backdrop-blur-md">
-                    <div className="flex items-center gap-2 md:gap-4 flex-1">
-                      <button onClick={() => setActiveChatId(null)} className="md:hidden p-2 hover:bg-slate-800 rounded-lg text-slate-400"><ICONS.Back className="w-6 h-6" /></button>
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shrink-0 shadow-lg ${activeChat.type === 'channel' ? 'bg-emerald-600 shadow-emerald-500/20' : 'bg-indigo-600 shadow-indigo-500/20'}`}>{activeChat.name[0]}</div>
-                      <div className="truncate"><h3 className="font-semibold truncate text-sm md:text-base">{activeChat.name}</h3><p className="text-[10px] text-slate-500">{activeChat.handle || activeChat.type.toUpperCase()}</p></div>
+                  <header className="h-20 border-b border-slate-800 px-8 flex items-center justify-between backdrop-blur-md">
+                    <div className="flex items-center gap-4">
+                      <button onClick={() => setActiveChatId(null)} className="md:hidden p-2"><ICONS.Back /></button>
+                      <h3 className="font-black text-lg">{activeChat.name}</h3>
                     </div>
+                    {(currentUser?.id === activeChat.creatorId || currentUser?.role === 'developer') && (
+                      <button onClick={() => setShowModModal(true)} className="px-4 py-2 bg-slate-800 hover:bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all">
+                        {t('mod_title')}
+                      </button>
+                    )}
                   </header>
-                  <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 space-y-4">
-                    {activeChat.messages.map(m => (
-                      <div key={m.id} className={`flex ${m.senderId === currentUser?.id ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[85%] md:max-w-[70%] p-4 rounded-2xl shadow-md ${m.senderId === currentUser?.id ? 'bg-indigo-600 text-white' : (currentUser?.theme === 'light' ? 'bg-slate-100 border border-slate-200 text-slate-900' : 'bg-slate-800 text-slate-100')}`}>
-                          {m.senderId !== currentUser?.id && <p className="text-[10px] opacity-50 mb-1 font-bold">{m.senderName}</p>}
-                          {m.text && <p className="text-sm whitespace-pre-wrap">{m.text}</p>}
-                          <p className="text-[9px] mt-2 opacity-40 text-right">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                  <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
+                    {activeChat.isBlocked && currentUser?.role !== 'developer' ? (
+                      <div className="flex items-center justify-center h-full text-red-500 font-bold uppercase tracking-widest animate-pulse">{t('chat_blocked')}</div>
+                    ) : (
+                      activeChat.messages.map(m => (
+                        <div key={m.id} className={`flex ${m.senderId === currentUser?.id ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[75%] p-4 rounded-2xl shadow-xl ${m.senderId === currentUser?.id ? 'bg-indigo-600 text-white' : 'bg-slate-800/80 text-slate-100 border border-slate-700'}`}>
+                            <p className="text-[10px] font-black opacity-50 mb-1">{m.senderName}</p>
+                            <p className="text-sm">{m.text}</p>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {isTyping && <div className="text-xs text-slate-500 italic">{t('chat_typing')}...</div>}
+                      ))
+                    )}
                   </div>
-                  <footer className="p-4 md:p-6">
-                    <div className={`border rounded-2xl p-2 flex items-center gap-2 ${currentUser?.theme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-slate-900 border-slate-800'}`}>
-                      <textarea rows={1} value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendMessage())} placeholder={t('chat_input_placeholder')} className="flex-1 bg-transparent border-none outline-none px-4 py-2 resize-none text-sm" />
-                      <button onClick={() => handleSendMessage()} className="p-3 bg-indigo-600 text-white rounded-xl shadow-lg transition-transform active:scale-95"><ICONS.Send className="w-5 h-5" /></button>
-                    </div>
-                  </footer>
+                  {!activeChat.isBlocked && (
+                    <footer className="p-6">
+                      <div className="border border-slate-800 rounded-2xl p-2 flex items-center gap-2 bg-slate-900/50 shadow-2xl">
+                        <input value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder={t('chat_input_placeholder')} className="flex-1 bg-transparent border-none outline-none px-4 py-3 text-sm" />
+                        <button onClick={handleSendMessage} className="p-4 bg-indigo-600 text-white rounded-xl shadow-lg hover:scale-105 active:scale-95 transition-all"><ICONS.Send className="w-5 h-5" /></button>
+                      </div>
+                    </footer>
+                  )}
                 </>
               ) : (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-600 p-6 text-center">
-                  <ICONS.Logo className="w-32 h-32 mb-4 opacity-20 grayscale" />
-                  <p className="font-outfit font-bold text-xl">{t('appName')} Messenger</p>
-                  <p className="text-sm opacity-50 mt-1">{t('chat_no_select')}</p>
+                <div className="flex-1 flex flex-col items-center justify-center opacity-30">
+                  <ICONS.Logo className="w-48 h-48 mb-6 grayscale" />
+                  <p className="font-outfit font-black text-2xl uppercase tracking-widest">{t('appName')}</p>
                 </div>
               )}
             </main>
           </>
-        ) : activeView === FluxurView.PROFILE ? (
-          <div className="flex-1 p-8 md:p-12 max-w-2xl mx-auto space-y-12 overflow-y-auto">
-            <h1 className="text-4xl font-outfit font-black">{t('profile_title')}</h1>
-            <div className={`border transition-colors duration-300 rounded-3xl p-6 md:p-8 flex-col md:flex-row flex items-center gap-8 ${currentUser?.theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-900 border-slate-800 shadow-xl'}`}>
-              <div className="relative group cursor-pointer" onClick={() => profileAvatarRef.current?.click()}>
-                <input type="file" ref={profileAvatarRef} className="hidden" accept="image/*" onChange={(e) => handleAvatarSelect(e, true)} />
-                <img src={currentUser?.avatar || DEFAULT_AVATAR} className="w-32 h-32 rounded-3xl shadow-2xl transition-transform group-hover:scale-105 object-cover" alt="Profile" />
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl flex items-center justify-center flex-col gap-2">
-                   <ICONS.Plus className="w-8 h-8 text-white" />
-                   <p className="text-[10px] font-black text-white uppercase tracking-widest">{t('profile_change_photo')}</p>
+        ) : activeView === FluxurView.ADMIN ? (
+          <div className="flex-1 p-12 max-w-6xl mx-auto overflow-y-auto space-y-12">
+            <h1 className="text-5xl font-black tracking-tighter">{t('admin_title')}</h1>
+            <div className="grid md:grid-cols-2 gap-12">
+              <section className="space-y-6">
+                <h3 className="text-xl font-bold uppercase tracking-widest text-indigo-400">{t('admin_users')}</h3>
+                <div className="space-y-3">
+                  {registeredUsers.map(u => (
+                    <div key={u.id} className="p-4 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <img src={u.avatar} className="w-10 h-10 rounded-full" />
+                        <div><p className="font-bold text-sm">{u.name}</p><p className="text-xs text-slate-500">@{u.login}</p></div>
+                      </div>
+                      <button onClick={() => adminBlockUser(u.id, !u.isBlocked)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${u.isBlocked ? 'bg-emerald-600' : 'bg-red-600'}`}>
+                        {u.isBlocked ? t('admin_unblock_user') : t('admin_block_user')}
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              </div>
-              <div className="text-center md:text-left">
-                <h2 className="text-3xl font-bold mb-1">{currentUser?.name}</h2>
-                <p className="text-slate-500 font-medium">@{currentUser?.login}</p>
-              </div>
+              </section>
+              <section className="space-y-6">
+                <h3 className="text-xl font-bold uppercase tracking-widest text-emerald-400">{t('admin_chats')}</h3>
+                <div className="space-y-3">
+                  {chats.map(c => (
+                    <div key={c.id} className="p-4 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-between">
+                      <div className="truncate mr-4"><p className="font-bold text-sm truncate">{c.name}</p><p className="text-xs text-slate-500">{c.type}</p></div>
+                      <button onClick={() => adminBlockChat(c.id, !c.isBlocked)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase shrink-0 ${c.isBlocked ? 'bg-emerald-600' : 'bg-red-600'}`}>
+                        {c.isBlocked ? t('admin_unblock_chat') : t('admin_block_chat')}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
             </div>
-            <button onClick={() => { setCurrentUser(null); setActiveView(FluxurView.AUTH); }} className="w-full p-5 bg-red-600/10 text-red-500 rounded-2xl font-black uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-95">{t('profile_logout')}</button>
+          </div>
+        ) : activeView === FluxurView.SETTINGS ? (
+          <div className="flex-1 p-12 max-w-2xl mx-auto space-y-12 overflow-y-auto">
+            <h1 className="text-5xl font-black tracking-tighter">{t('settings_title')}</h1>
+            
+            <div className="space-y-8">
+              <section className="space-y-4">
+                <h3 className="text-xs font-black uppercase tracking-[0.3em] text-slate-500">{t('settings_theme')}</h3>
+                <div className="flex flex-wrap gap-3">
+                  {Object.keys(THEMES).map(themeName => (
+                    <button key={themeName} onClick={() => updateSetting('theme', themeName)} className={`px-6 py-3 rounded-2xl font-bold capitalize transition-all border-2 ${currentUser?.theme === themeName ? 'border-indigo-500 bg-indigo-600/10' : 'border-slate-800 bg-slate-900 hover:border-slate-600'}`}>
+                      {themeName}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <h3 className="text-xs font-black uppercase tracking-[0.3em] text-slate-500">{t('settings_language')}</h3>
+                <div className="flex gap-4">
+                  <button onClick={() => updateSetting('language', 'ru')} className={`px-8 py-4 rounded-2xl font-black ${currentUser?.language === 'ru' ? 'bg-indigo-600' : 'bg-slate-800'}`}>RU</button>
+                  <button onClick={() => updateSetting('language', 'en')} className={`px-8 py-4 rounded-2xl font-black ${currentUser?.language === 'en' ? 'bg-indigo-600' : 'bg-slate-800'}`}>EN</button>
+                  <input type="text" placeholder={t('settings_lang_any')} className="flex-1 bg-slate-900 border border-slate-800 rounded-2xl px-6 outline-none focus:ring-2 focus:ring-indigo-500" value={currentUser?.language} onChange={e => updateSetting('language', e.target.value.toLowerCase())} />
+                </div>
+              </section>
+            </div>
           </div>
         ) : (
-          <div className="flex-1 p-8 md:p-12 max-w-2xl mx-auto space-y-12 overflow-y-auto text-center">
-             <h1 className="text-4xl font-outfit font-black mb-10">{t('settings_title')}</h1>
-             <div className="flex flex-col gap-4 mt-8">
-                <button onClick={() => updateCurrentUser({ theme: currentUser?.theme === 'light' ? 'dark' : 'light' })} className="p-4 bg-slate-800 rounded-2xl hover:bg-indigo-600 transition-colors">
-                  {t('settings_theme')}: {currentUser?.theme === 'light' ? 'Light' : 'Dark'}
-                </button>
-                <button onClick={() => updateCurrentUser({ language: currentUser?.language === 'ru' ? 'en' : 'ru' })} className="p-4 bg-slate-800 rounded-2xl hover:bg-indigo-600 transition-colors">
-                  {t('settings_language')}: {currentUser?.language === 'ru' ? 'Русский' : 'English'}
+          <div className="flex-1 p-12 flex items-center justify-center">
+             <div className="bg-slate-900 border border-slate-800 p-12 rounded-[4rem] text-center max-w-md w-full shadow-2xl">
+                <img src={currentUser?.avatar} className="w-32 h-32 rounded-[2rem] mx-auto mb-6 shadow-2xl border-4 border-indigo-600/20" />
+                <h2 className="text-4xl font-black mb-2">{currentUser?.name}</h2>
+                <p className="text-indigo-400 font-bold tracking-widest mb-12">@{currentUser?.login}</p>
+                <button onClick={() => { setCurrentUser(null); localStorage.removeItem('fluxur_session_v5'); setActiveView(FluxurView.AUTH); }} className="w-full py-5 bg-red-600/10 text-red-500 rounded-3xl font-black uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all">
+                  {t('profile_logout')}
                 </button>
              </div>
           </div>
         )}
       </div>
 
+      {showModModal && activeChat && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-50 flex items-center justify-center p-6">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-[3rem] p-10 overflow-hidden flex flex-col max-h-[80vh]">
+            <div className="flex justify-between items-center mb-10">
+              <h3 className="text-3xl font-black">{t('mod_title')}</h3>
+              <button onClick={() => setShowModModal(false)} className="text-2xl">&times;</button>
+            </div>
+            <div className="flex-1 overflow-y-auto pr-2 space-y-6">
+              <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500">{t('mod_participants')}</h4>
+              {activeChat.participants.map(pId => {
+                const u = registeredUsers.find(ru => ru.id === pId);
+                if (!u || u.id === currentUser?.id) return null;
+                return (
+                  <div key={pId} className="flex items-center justify-between p-4 bg-slate-800/40 rounded-3xl border border-slate-800">
+                    <span className="font-bold text-sm">{u.name}</span>
+                    <div className="flex gap-1.5">
+                      <button onClick={() => handleBanUser(u.id, 86400000)} className="text-[8px] px-2 py-1.5 bg-amber-600/20 text-amber-500 rounded-lg font-black uppercase">{t('mod_ban_1d')}</button>
+                      <button onClick={() => handleBanUser(u.id, 604800000)} className="text-[8px] px-2 py-1.5 bg-orange-600/20 text-orange-500 rounded-lg font-black uppercase">{t('mod_ban_1w')}</button>
+                      <button onClick={() => handleBanUser(u.id, 31536000000)} className="text-[8px] px-2 py-1.5 bg-red-600/20 text-red-500 rounded-lg font-black uppercase">{t('mod_ban_1y')}</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <button onClick={() => { db.get('chats').get(activeChat.id).put(null as any); setActiveChatId(null); setShowModModal(false); }} className="mt-8 p-5 bg-red-600/10 text-red-500 rounded-3xl font-black uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all">
+              {t('mod_delete_chat')}
+            </button>
+          </div>
+        </div>
+      )}
+
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl animate-in zoom-in-95">
-            <h3 className="text-2xl font-outfit font-bold mb-6">{showCreateModal === 'channel' ? t('modal_create_channel') : t('modal_create_chat')}</h3>
-            <div className="space-y-4 mb-8">
-              <input type="text" placeholder={t('modal_name_placeholder')} className="w-full bg-slate-800 rounded-2xl py-4 px-5 outline-none focus:ring-2 focus:ring-indigo-500 text-white" value={newName} onChange={e => setNewName(e.target.value)} />
-              <input type="text" placeholder={t('modal_handle_placeholder')} className="w-full bg-slate-800 rounded-2xl py-4 px-5 outline-none focus:ring-2 focus:ring-indigo-500 text-white" value={newHandle} onChange={e => setNewHandle(e.target.value)} />
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-in zoom-in-95">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-[3rem] p-10">
+            <h3 className="text-2xl font-black mb-8">{showCreateModal === 'channel' ? t('modal_create_channel') : t('modal_create_chat')}</h3>
+            <div className="space-y-4 mb-10">
+              <input type="text" placeholder="Name..." className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 outline-none focus:ring-2 focus:ring-indigo-500 text-white" value={newName} onChange={e => setNewName(e.target.value)} />
+              <input type="text" placeholder="Handle (e.g. news)..." className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 outline-none focus:ring-2 focus:ring-indigo-500 text-white" value={newHandle} onChange={e => setNewHandle(e.target.value)} />
             </div>
             <div className="flex gap-4">
-              <button onClick={() => setShowCreateModal(null)} className="flex-1 py-4 text-slate-500 font-bold hover:text-white transition-colors">{t('modal_cancel')}</button>
-              <button onClick={handleCreateChat} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 active:scale-95 transition-transform">{t('modal_create')}</button>
+              <button onClick={() => setShowCreateModal(null)} className="flex-1 py-4 text-slate-500 font-bold uppercase text-xs">{t('modal_cancel')}</button>
+              <button onClick={handleCreateChat} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs shadow-lg">{t('modal_create')}</button>
             </div>
           </div>
         </div>

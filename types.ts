@@ -3,15 +3,15 @@ export interface User {
   id: string;
   name: string;
   login: string;
-  password?: string; // For mock persistence
+  password?: string;
   avatar: string;
   status: 'online' | 'offline' | 'away';
   isAI?: boolean;
   isPremium?: boolean;
   premiumStatus?: 'none' | 'pending' | 'active';
   role?: 'developer' | 'user' | 'admin';
-  theme?: 'dark' | 'light' | 'midnight';
-  language?: 'ru' | 'en';
+  theme?: 'dark' | 'light' | 'midnight' | 'forest' | 'sunset';
+  language?: string; // Changed to string to support "any language"
   isBlocked?: boolean;
 }
 
@@ -19,7 +19,7 @@ export interface FileAttachment {
   name: string;
   type: string;
   size: number;
-  url: string; // Base64 for this mock
+  url: string;
 }
 
 export interface Message {
@@ -37,8 +37,9 @@ export interface Message {
 export interface Chat {
   id: string;
   name: string;
-  handle?: string; // Unique login for groups/channels
-  participants: string[]; // IDs of users
+  handle?: string;
+  participants: string[];
+  bannedUsers?: Record<string, number>; // userId -> timestamp of expiry
   messages: Message[];
   lastMessage?: string;
   type: 'direct' | 'group' | 'ai' | 'channel';
