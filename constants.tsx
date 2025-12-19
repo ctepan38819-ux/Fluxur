@@ -28,43 +28,16 @@ export const ICONS = {
           <feComposite in="SourceGraphic" in2="blur" operator="over" />
         </filter>
       </defs>
-      
-      {/* Black Background as requested (do not change or remove) */}
       <rect width="100" height="100" fill="#000000" />
-      
-      {/* The Arrow Stem of the 'F' - High fidelity recreation */}
-      <path 
-        d="M28 82 L28 40 L18 40 L34 15 L50 40 L40 40 L40 82 Z" 
-        fill="url(#fluxur-gradient-main)"
-      />
-      
-      {/* The Wing Top Bar of the 'F' */}
-      <path 
-        d="M45 22 H78 C90 22 95 32 85 42 H52 L45 22 Z" 
-        fill="url(#fluxur-gradient-main)"
-      />
-      
-      {/* Integrated Speech Bubble with 3 dots */}
-      <path 
-        d="M52 48 C52 44 75 44 75 54 C75 62 60 62 60 68 L56 72 V62 C48 62 48 48 52 48 Z" 
-        fill="#1e293b" 
-        stroke="#3b82f6" 
-        strokeWidth="1"
-      />
+      <path d="M28 82 L28 40 L18 40 L34 15 L50 40 L40 40 L40 82 Z" fill="url(#fluxur-gradient-main)"/>
+      <path d="M45 22 H78 C90 22 95 32 85 42 H52 L45 22 Z" fill="url(#fluxur-gradient-main)"/>
+      <path d="M52 48 C52 44 75 44 75 54 C75 62 60 62 60 68 L56 72 V62 C48 62 48 48 52 48 Z" fill="#1e293b" stroke="#3b82f6" strokeWidth="1"/>
       <circle cx="60" cy="54" r="1.2" fill="white" />
       <circle cx="65" cy="54" r="1.2" fill="white" />
       <circle cx="70" cy="54" r="1.2" fill="white" />
-      
-      {/* Left Circuit Node Decoration with Glow */}
       <g filter="url(#glow)">
         <circle cx="28" cy="58" r="4.5" stroke="#c026d3" strokeWidth="2.5" fill="#000000" />
-        <path 
-          d="M28 62.5 V74 H42" 
-          stroke="url(#fluxur-gradient-circuit)" 
-          strokeWidth="3.5" 
-          strokeLinecap="round" 
-          strokeLinejoin="round" 
-        />
+        <path d="M28 62.5 V74 H42" stroke="url(#fluxur-gradient-circuit)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
         <circle cx="46" cy="74" r="3.5" fill="#8b5cf6" />
       </g>
     </svg>
@@ -95,5 +68,17 @@ export const ICONS = {
   ),
   Back: (props: any) => (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m15 18-6-6 6-6"/></svg>
+  ),
+  Phone: (props: any) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+  ),
+  File: (props: any) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+  ),
+  Download: (props: any) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+  ),
+  Clip: (props: any) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
   ),
 };

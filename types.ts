@@ -11,21 +11,33 @@ export interface User {
   premiumStatus?: 'none' | 'pending' | 'active';
   role?: 'developer' | 'user' | 'admin';
   theme?: 'dark' | 'light' | 'midnight';
+  language?: 'ru' | 'en';
   isBlocked?: boolean;
+}
+
+export interface FileAttachment {
+  name: string;
+  type: string;
+  size: number;
+  url: string; // Base64 for this mock
 }
 
 export interface Message {
   id: string;
   senderId: string;
   senderName: string;
-  text: string;
+  text?: string;
   timestamp: Date;
   isAiGenerated?: boolean;
+  file?: FileAttachment;
+  isCallLog?: boolean;
+  callDuration?: string;
 }
 
 export interface Chat {
   id: string;
   name: string;
+  handle?: string; // Unique login for groups/channels
   participants: string[]; // IDs of users
   messages: Message[];
   lastMessage?: string;
