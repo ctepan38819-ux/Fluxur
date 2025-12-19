@@ -6,8 +6,8 @@ import { translations } from './translations';
 import { chatWithAssistant, summarizeConversation } from './geminiService';
 
 /**
- * Fluxur Cloud Architecture v12.0
- * Используем набор самых стабильных реле в качестве "Облачного сервера".
+ * Fluxur Cloud Architecture v12.1
+ * Централизованный облачный реестр с функцией глобального поиска.
  */
 const CLOUD_RELAYS = [
   'https://gun-manhattan.herokuapp.com/gun',
@@ -25,10 +25,9 @@ const CLOUD_RELAYS = [
 const gun = (window as any).Gun({
   peers: CLOUD_RELAYS,
   localStorage: true,
-  radisk: true // Включаем расширенное хранилище
+  radisk: true
 });
 
-// Уникальный ключ для этой версии сети, чтобы избежать конфликтов со старыми данными
 const SERVER_ROOT_KEY = 'fluxur_v12_cloud_stable'; 
 const SESSION_KEY = 'fluxur_v12_session';
 const server = gun.get(SERVER_ROOT_KEY);
@@ -66,6 +65,7 @@ export default function App() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [isCloudSynced, setIsCloudSynced] = useState(false);
   const [peerCount, setPeerCount] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState<'group' | 'channel' | null>(null);
@@ -81,9 +81,8 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // --- Ядро синхронизации (Cloud Sync Core) ---
+  // --- Ядро синхронизации ---
   useEffect(() => {
-    // Мониторинг подключений
     const peerCheck = setInterval(() => {
       const peers = (gun as any)._?.opt?.peers || {};
       const active = Object.keys(peers).filter(k => peers[k].wire?.readyState === 1).length;
@@ -91,14 +90,12 @@ export default function App() {
       if (active > 0) setIsCloudSynced(true);
     }, 2000);
 
-    // 1. Подписываемся на ГЛОБАЛЬНЫЙ список пользователей (Cloud Users)
     server.get('cloud_users').map().on((userData: any) => {
       if (userData && userData.id) {
         setRegisteredUsers(prev => {
           const others = prev.filter(u => u.id !== userData.id);
           return [...others, userData];
         });
-        // Если это наш профиль и он обновился в облаке - синхронизируем локально
         if (currentUser && userData.id === currentUser.id) {
           if (JSON.stringify(userData) !== JSON.stringify(currentUser)) {
             setCurrentUser(userData);
@@ -108,7 +105,6 @@ export default function App() {
       }
     });
 
-    // 2. Подписываемся на ГЛОБАЛЬНЫЙ список чатов (Cloud Chats)
     server.get('cloud_chats').map().on((chatData: any) => {
       if (chatData && chatData.id) {
         try {
@@ -140,6 +136,29 @@ export default function App() {
     return set[key] || key;
   };
 
+  // --- Логика Поиска ---
+  const searchResults = useMemo(() => {
+    const query = chatSearchQuery.toLowerCase().trim();
+    if (!query) {
+      // Если пусто - показываем только чаты пользователя
+      return {
+        mine: chats.filter(c => c.participants.includes(currentUser?.id || '')),
+        global: []
+      };
+    }
+
+    // Фильтруем все чаты (и те что у нас, и глобальные)
+    const matches = chats.filter(c => 
+      c.name.toLowerCase().includes(query) || 
+      (c.handle && c.handle.toLowerCase().includes(query))
+    );
+
+    return {
+      mine: matches.filter(c => c.participants.includes(currentUser?.id || '')),
+      global: matches.filter(c => !c.participants.includes(currentUser?.id || '') && c.type === 'channel')
+    };
+  }, [chats, chatSearchQuery, currentUser?.id]);
+
   const handleAuth = async () => {
     setAuthError('');
     setIsLoading(true);
@@ -152,7 +171,6 @@ export default function App() {
         return;
       }
 
-      // Проверяем занятость логина в Облаке
       server.get('logins').get(login).once((existingId) => {
         if (existingId) {
           setAuthError(t('auth_err_taken'));
@@ -174,7 +192,6 @@ export default function App() {
             isBlocked: false
           };
 
-          // Сохраняем в облако
           server.get('cloud_users').get(uid).put(newUser);
           server.get('logins').get(login).put(uid);
 
@@ -185,7 +202,6 @@ export default function App() {
         }
       });
     } else {
-      // Логин (Cloud Auth)
       server.get('logins').get(login).once((uid) => {
         if (uid) {
           server.get('cloud_users').get(uid).once((user: any) => {
@@ -221,7 +237,6 @@ export default function App() {
       creatorId: currentUser.id
     };
 
-    // Публикуем в облако
     const putData = {
       ...newChat,
       participants: JSON.stringify(newChat.participants),
@@ -235,6 +250,17 @@ export default function App() {
     setShowCreateModal(null);
     setNewName('');
     setNewHandle('');
+  };
+
+  const handleJoinChat = (chat: Chat) => {
+    if (!currentUser) return;
+    if (chat.participants.includes(currentUser.id)) {
+      setActiveChatId(chat.id);
+      return;
+    }
+    const updated = [...chat.participants, currentUser.id];
+    server.get('cloud_chats').get(chat.id).get('participants').put(JSON.stringify(updated));
+    setActiveChatId(chat.id);
   };
 
   const handleSendMessage = useCallback(() => {
@@ -251,7 +277,6 @@ export default function App() {
 
     const updatedMessages = [...activeChat.messages, msg].slice(-100);
 
-    // Обновляем чат в облаке
     server.get('cloud_chats').get(activeChat.id).put({
       messages: JSON.stringify(updatedMessages),
       lastMessage: inputText
@@ -262,21 +287,12 @@ export default function App() {
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
   
-  // Чаты, которые мы видим: те, где мы участвуем, или публичные каналы
-  const myVisibleChats = useMemo(() => {
-    if (!currentUser) return [];
-    return chats.filter(c => 
-      c.participants.includes(currentUser.id) || c.type === 'channel'
-    );
-  }, [chats, currentUser]);
-
   const currentTheme = THEMES[currentUser?.theme || 'dark'];
   const currentNav = NAV_THEMES[currentUser?.theme || 'dark'];
 
   if (activeView === FluxurView.AUTH) {
     return (
       <div className="flex items-center justify-center h-screen w-screen bg-slate-950 p-6 text-white overflow-hidden relative">
-        {/* Animated Background Orbs */}
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/20 blur-[120px] rounded-full animate-pulse" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/20 blur-[120px] rounded-full animate-pulse delay-1000" />
         
@@ -353,7 +369,6 @@ export default function App() {
                <div className={`w-2 h-2 rounded-full ${peerCount > 0 ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                <span className="text-[10px] font-black uppercase tracking-widest">{peerCount > 0 ? 'Cloud Server Active' : 'Connecting to Server...'}</span>
              </div>
-             <p className="text-[8px] font-medium max-w-[200px] text-center italic">Encryption active. All data stored in Fluxur Mesh Cloud.</p>
           </div>
         </div>
       </div>
@@ -362,19 +377,13 @@ export default function App() {
 
   return (
     <div className={`flex h-screen w-screen overflow-hidden font-inter transition-all duration-700 ${currentTheme}`}>
-      {/* Cloud Status Header */}
-      <div className="fixed top-0 left-0 right-0 h-[2px] z-[100] flex">
-        <div className={`h-full transition-all duration-1000 ${isCloudSynced ? 'bg-indigo-500 shadow-[0_0_10px_#6366f1]' : 'bg-red-500 animate-pulse'}`} style={{ width: isCloudSynced ? '100%' : '30%' }} />
-      </div>
-
       <nav className={`w-24 border-r flex flex-col items-center py-10 gap-10 shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentNav}`}>
         <div className="w-14 h-14 cursor-pointer hover:scale-110 mb-6 transition-all" onClick={() => setActiveView(FluxurView.CHATS)}><ICONS.Logo className="drop-shadow-lg" /></div>
         <button onClick={() => setActiveView(FluxurView.CHATS)} className={`p-4 rounded-[1.5rem] transition-all ${activeView === FluxurView.CHATS ? 'bg-indigo-600 text-white shadow-2xl scale-110' : 'opacity-30 hover:opacity-100 hover:scale-105'}`}><ICONS.Message /></button>
         <button onClick={() => setActiveView(FluxurView.PROFILE)} className={`p-4 rounded-[1.5rem] transition-all ${activeView === FluxurView.PROFILE ? 'bg-indigo-600 text-white shadow-2xl scale-110' : 'opacity-30 hover:opacity-100 hover:scale-105'}`}><ICONS.User /></button>
         <div className="flex-1" />
-        <div className="group relative cursor-help">
+        <div className="group relative">
           <div className={`w-3 h-3 rounded-full mb-6 ${peerCount > 0 ? 'bg-emerald-500 animate-pulse shadow-[0_0_15px_#10b981]' : 'bg-red-500'}`} />
-          <div className="absolute left-14 bottom-8 bg-black text-white text-[8px] p-2 rounded hidden group-hover:block whitespace-nowrap z-50 font-black uppercase tracking-widest border border-white/10">Cloud Sync: {peerCount} Nodes</div>
         </div>
         <button onClick={() => setActiveView(FluxurView.SETTINGS)} className={`p-4 rounded-[1.5rem] transition-all ${activeView === FluxurView.SETTINGS ? 'bg-indigo-600 text-white shadow-2xl scale-110' : 'opacity-30 hover:opacity-100 hover:scale-105'}`}><ICONS.Settings /></button>
       </nav>
@@ -384,30 +393,72 @@ export default function App() {
           <>
             <aside className={`w-full md:w-96 border-r flex flex-col shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentNav}`}>
               <div className="p-8 flex flex-col h-full">
-                <div className="flex items-center justify-between mb-10">
+                <div className="flex items-center justify-between mb-8">
                   <h2 className="text-3xl font-black font-outfit tracking-tighter italic text-indigo-500">Fluxur</h2>
-                  <div className="flex gap-3">
-                    <button onClick={() => setShowCreateModal('group')} className="p-3 bg-white/5 hover:bg-indigo-600 text-indigo-400 hover:text-white rounded-2xl transition-all"><ICONS.Plus className="w-5 h-5" /></button>
-                    <button onClick={() => setShowCreateModal('channel')} className="p-3 bg-white/5 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-2xl transition-all"><ICONS.Message className="w-5 h-5" /></button>
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowCreateModal('group')} className="p-2.5 bg-white/5 hover:bg-indigo-600 text-indigo-400 hover:text-white rounded-xl transition-all"><ICONS.Plus className="w-5 h-5" /></button>
+                    <button onClick={() => setShowCreateModal('channel')} className="p-2.5 bg-white/5 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-xl transition-all"><ICONS.Message className="w-5 h-5" /></button>
                   </div>
                 </div>
+
+                {/* SEARCH BAR */}
+                <div className="relative mb-8 group">
+                  <ICONS.Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
+                  <input 
+                    type="text" 
+                    placeholder={t('chat_search')} 
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-10 outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-semibold text-sm"
+                    value={chatSearchQuery}
+                    onChange={(e) => setChatSearchQuery(e.target.value)}
+                  />
+                  {chatSearchQuery && (
+                    <button 
+                      onClick={() => setChatSearchQuery('')}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+                    >
+                      <span className="text-lg">&times;</span>
+                    </button>
+                  )}
+                </div>
                 
-                <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                  {myVisibleChats.map(chat => (
-                    <div key={chat.id} 
-                      onClick={() => setActiveChatId(chat.id)} 
-                      className={`p-6 rounded-[2.5rem] cursor-pointer transition-all border ${activeChatId === chat.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xl scale-[0.98]' : 'hover:bg-white/5 border-transparent'}`}>
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-black text-base truncate">{chat.name}</span>
-                        {chat.type === 'channel' && <span className="text-[7px] bg-white/10 px-2 py-0.5 rounded-full font-black uppercase tracking-widest">Global</span>}
+                <div className="flex-1 overflow-y-auto space-y-6 pr-2 custom-scrollbar">
+                  {/* МОИ ЧАТЫ */}
+                  <div className="space-y-3">
+                    {searchResults.mine.length > 0 && <p className="text-[9px] font-black uppercase tracking-[0.4em] text-slate-500 mb-2 ml-4">My Conversations</p>}
+                    {searchResults.mine.map(chat => (
+                      <div key={chat.id} 
+                        onClick={() => setActiveChatId(chat.id)} 
+                        className={`p-6 rounded-[2.2rem] cursor-pointer transition-all border ${activeChatId === chat.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xl scale-[0.98]' : 'hover:bg-white/5 border-transparent'}`}>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-black text-sm truncate">{chat.name}</span>
+                        </div>
+                        <p className={`text-[10px] truncate opacity-40 font-medium ${activeChatId === chat.id ? 'text-white/80' : ''}`}>{chat.lastMessage || 'Cloud transmission...'}</p>
                       </div>
-                      <p className={`text-xs truncate opacity-40 font-medium ${activeChatId === chat.id ? 'text-white/80' : ''}`}>{chat.lastMessage || 'Cloud: Encrypted data...'}</p>
+                    ))}
+                  </div>
+
+                  {/* ГЛОБАЛЬНЫЕ РЕЗУЛЬТАТЫ */}
+                  {searchResults.global.length > 0 && (
+                    <div className="space-y-3 pt-4 border-t border-white/5">
+                      <p className="text-[9px] font-black uppercase tracking-[0.4em] text-indigo-400 mb-2 ml-4">Found in Cloud</p>
+                      {searchResults.global.map(chat => (
+                        <div key={chat.id} 
+                          onClick={() => handleJoinChat(chat)} 
+                          className="p-6 rounded-[2.2rem] cursor-pointer transition-all border border-indigo-500/20 bg-indigo-500/5 hover:bg-indigo-500/10 group">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-black text-sm truncate">{chat.name}</span>
+                            <span className="text-[7px] bg-indigo-600 px-2 py-0.5 rounded-full font-black uppercase text-white">Join</span>
+                          </div>
+                          <p className="text-[10px] truncate opacity-40 font-medium">{chat.handle || 'Public Channel'}</p>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                  {myVisibleChats.length === 0 && (
-                    <div className="text-center py-24 opacity-10">
-                      <ICONS.Logo className="w-16 h-16 mx-auto mb-4 grayscale" />
-                      <p className="text-[10px] font-black uppercase tracking-[0.5em]">Searching Cloud...</p>
+                  )}
+
+                  {searchResults.mine.length === 0 && searchResults.global.length === 0 && (
+                    <div className="text-center py-24 opacity-10 flex flex-col items-center">
+                      <ICONS.Search className="w-12 h-12 mb-4" />
+                      <p className="text-[10px] font-black uppercase tracking-[0.5em]">{t('chat_empty')}</p>
                     </div>
                   )}
                 </div>
@@ -476,17 +527,6 @@ export default function App() {
                 <h2 className="text-5xl font-black font-outfit mb-3 tracking-tighter italic">{currentUser?.name}</h2>
                 <p className="text-indigo-500 font-black tracking-[0.4em] text-sm mb-16 uppercase opacity-60">@{currentUser?.login}</p>
                 
-                <div className="grid grid-cols-2 gap-4 mb-10">
-                  <div className="bg-black/40 p-5 rounded-[2rem] border border-white/5 text-center">
-                    <p className="text-[8px] font-black uppercase text-slate-500 mb-2">Cloud Node</p>
-                    <p className="text-[10px] font-black text-indigo-400">#FX-{currentUser?.id.toUpperCase()}</p>
-                  </div>
-                  <div className="bg-black/40 p-5 rounded-[2rem] border border-white/5 text-center">
-                    <p className="text-[8px] font-black uppercase text-slate-500 mb-2">Security</p>
-                    <p className="text-[10px] font-black text-emerald-400">LEVEL 7 AES</p>
-                  </div>
-                </div>
-
                 <button onClick={() => { localStorage.removeItem(SESSION_KEY); window.location.reload(); }} className="w-full py-6 bg-red-600/10 text-red-500 rounded-[2.5rem] font-black uppercase tracking-[0.5em] hover:bg-red-600 hover:text-white transition-all text-[10px]">
                   Disconnect Cloud
                 </button>
@@ -500,16 +540,10 @@ export default function App() {
           <div className="w-full max-w-md bg-slate-900 border border-white/10 rounded-[4.5rem] p-16 shadow-[0_0_100px_rgba(0,0,0,1)]">
             <h3 className="text-4xl font-black font-outfit mb-12 uppercase tracking-tighter text-center italic text-indigo-500">Initialize {showCreateModal}</h3>
             <div className="space-y-8 mb-16">
-              <div className="space-y-3">
-                <p className="text-[9px] font-black uppercase tracking-[0.4em] text-slate-500 ml-4">Registry Name</p>
-                <input type="text" placeholder="Fluxur Channel..." className="w-full bg-white/5 border border-white/10 rounded-[1.8rem] py-6 px-10 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newName} onChange={e => setNewName(e.target.value)} />
-              </div>
-              <div className="space-y-3">
-                <p className="text-[9px] font-black uppercase tracking-[0.4em] text-slate-500 ml-4">Global Handle</p>
-                <div className="relative">
-                  <span className="absolute left-8 top-1/2 -translate-y-1/2 text-slate-500 font-bold">@</span>
-                  <input type="text" placeholder="tech-hub" className="w-full bg-white/5 border border-white/10 rounded-[1.8rem] py-6 pl-12 pr-10 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newHandle} onChange={e => setNewHandle(e.target.value)} />
-                </div>
+              <input type="text" placeholder="Registry Name..." className="w-full bg-white/5 border border-white/10 rounded-[1.8rem] py-6 px-10 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newName} onChange={e => setNewName(e.target.value)} />
+              <div className="relative">
+                <span className="absolute left-8 top-1/2 -translate-y-1/2 text-slate-500 font-bold">@</span>
+                <input type="text" placeholder="tech-hub" className="w-full bg-white/5 border border-white/10 rounded-[1.8rem] py-6 pl-12 pr-10 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newHandle} onChange={e => setNewHandle(e.target.value)} />
               </div>
             </div>
             <div className="flex gap-6">
