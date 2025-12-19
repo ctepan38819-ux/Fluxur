@@ -6,6 +6,9 @@ import { translations } from './translations';
 import { chatWithAssistant, summarizeConversation } from './geminiService';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 
+// --- Default Avatar SVG as Base64 ---
+const DEFAULT_AVATAR = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTAwIDEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2I5YmRiZCIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNDAiIHI9IjIxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48cGF0aCBkPSJNMjAgOTAgQzIwIDYwIDgwIDYwIDgwIDkwIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48L3N2Zz4=";
+
 // --- Audio Utilities ---
 function encode(bytes: Uint8Array) {
   let binary = '';
@@ -137,11 +140,13 @@ export default function App() {
   const [showCreateModal, setShowCreateModal] = useState<'group' | 'channel' | null>(null);
   const [newName, setNewName] = useState('');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [authForm, setAuthForm] = useState({ name: '', login: '', password: '' });
+  const [authForm, setAuthForm] = useState({ name: '', login: '', password: '', avatar: DEFAULT_AVATAR });
   const [authError, setAuthError] = useState('');
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const profileAvatarRef = useRef<HTMLInputElement>(null);
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
 
@@ -220,7 +225,7 @@ export default function App() {
         id: Math.random().toString(36).substr(2, 9),
         name: authForm.name,
         login: normalizedLogin,
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${normalizedLogin}`,
+        avatar: authForm.avatar,
         status: 'online',
         isPremium: isDev, 
         premiumStatus: isDev ? 'active' : 'none',
@@ -273,6 +278,21 @@ export default function App() {
     setCurrentUser(updatedUser);
     const updatedList = registeredUsers.map(u => u.id === currentUser.id ? { ...u, ...updates, password: u.password } : u);
     saveUsersToStorage(updatedList);
+  };
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>, isProfile: boolean = false) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = reader.result as string;
+      if (isProfile) {
+        updateCurrentUser({ avatar: base64 });
+      } else {
+        setAuthForm(prev => ({ ...prev, avatar: base64 }));
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSendMessage = useCallback(async (file?: FileAttachment) => {
@@ -543,11 +563,27 @@ export default function App() {
       <div className="flex flex-col items-center justify-center h-screen w-screen bg-slate-950 p-6 font-inter text-white">
         <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl animate-in zoom-in-95">
           <div className="flex flex-col items-center mb-8 text-center">
-            <ICONS.Logo className="w-24 h-24 mb-4 drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]" />
+            <ICONS.Logo className="w-20 h-20 mb-4 drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]" />
             <h1 className="text-3xl font-outfit font-bold">{t('appName')}</h1>
             <p className="text-slate-400 text-sm mt-1">{t('tagline')}</p>
           </div>
           <div className="space-y-4">
+            {authMode === 'register' && (
+              <div className="flex flex-col items-center mb-6">
+                <input type="file" ref={avatarInputRef} className="hidden" accept="image/*" onChange={(e) => handleAvatarChange(e)} />
+                <div 
+                  onClick={() => avatarInputRef.current?.click()}
+                  className="w-24 h-24 rounded-full border-4 border-slate-800 bg-slate-800 flex items-center justify-center overflow-hidden cursor-pointer hover:border-indigo-500 transition-all group"
+                >
+                  {authForm.avatar ? (
+                    <img src={authForm.avatar} className="w-full h-full object-cover" />
+                  ) : (
+                    <ICONS.User className="w-10 h-10 text-slate-500 group-hover:text-indigo-400" />
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-2 uppercase font-black tracking-widest">{t('auth_avatar_select') || "Select Avatar"}</p>
+              </div>
+            )}
             {authMode === 'register' && (
               <input type="text" placeholder={t('auth_name')} className="w-full bg-slate-800 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500" value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})} />
             )}
@@ -636,7 +672,7 @@ export default function App() {
                   ))}
                   {searchResults.globalUsers.map(u => (
                     <div key={u.id} onClick={() => startDirectChat(u)} className="p-3 rounded-2xl cursor-pointer hover:bg-slate-800 transition-all flex items-center gap-3">
-                      <img src={u.avatar} className="w-8 h-8 rounded-full shadow-sm" />
+                      <img src={u.avatar || DEFAULT_AVATAR} className="w-8 h-8 rounded-full shadow-sm" />
                       <div className="truncate"><p className="font-bold text-sm truncate">{u.name}</p><p className="text-[10px] text-slate-500">@{u.login}</p></div>
                     </div>
                   ))}
@@ -703,7 +739,7 @@ export default function App() {
                   <div key={u.id} className={getCardClasses()}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-4">
-                        <img src={u.avatar} className={`w-12 h-12 rounded-full border-2 ${u.isBlocked ? 'grayscale border-red-500' : 'border-emerald-500'}`} />
+                        <img src={u.avatar || DEFAULT_AVATAR} className={`w-12 h-12 rounded-full border-2 ${u.isBlocked ? 'grayscale border-red-500' : 'border-emerald-500'}`} />
                         <div><p className="font-bold text-base">{u.name}</p><p className="text-xs text-slate-500">@{u.login}</p></div>
                       </div>
                       <button onClick={() => handleToggleBlockUser(u.id)} className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${u.isBlocked ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-500/20'}`}>{u.isBlocked ? t('admin_unblock') : t('admin_block')}</button>
@@ -716,8 +752,12 @@ export default function App() {
           <div className="flex-1 p-8 md:p-12 max-w-2xl mx-auto space-y-12 overflow-y-auto animate-in fade-in slide-in-from-bottom-6 duration-500">
             <h1 className="text-4xl font-outfit font-black">{t('profile_title')}</h1>
             <div className={getCardClasses() + " flex-col md:flex-row flex items-center gap-8"}>
-              <div className="relative group">
-                <img src={currentUser?.avatar} className="w-32 h-32 rounded-3xl shadow-2xl transition-transform group-hover:scale-105" />
+              <div className="relative group cursor-pointer" onClick={() => profileAvatarRef.current?.click()}>
+                <input type="file" ref={profileAvatarRef} className="hidden" accept="image/*" onChange={(e) => handleAvatarChange(e, true)} />
+                <img src={currentUser?.avatar || DEFAULT_AVATAR} className="w-32 h-32 rounded-3xl shadow-2xl transition-transform group-hover:scale-105 object-cover" />
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl flex items-center justify-center">
+                   <p className="text-[10px] font-black text-white uppercase tracking-widest">{t('profile_change_photo') || "Change"}</p>
+                </div>
                 <div className={`absolute -bottom-2 -right-2 w-6 h-6 rounded-full border-4 border-slate-900 ${currentUser?.status === 'online' ? 'bg-emerald-500' : 'bg-slate-500'}`}></div>
               </div>
               <div className="text-center md:text-left">

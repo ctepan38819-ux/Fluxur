@@ -8,6 +8,8 @@ export const translations = {
     auth_name: 'Имя',
     auth_login: 'Логин',
     auth_pass: 'Пароль',
+    // Added missing translation key
+    auth_avatar_select: 'Выберите аватар',
     auth_btn_login: 'Войти',
     auth_btn_register: 'Создать аккаунт',
     auth_switch_to_reg: 'Нет аккаунта? Регистрация',
@@ -42,6 +44,8 @@ export const translations = {
     admin_confirm_block: 'Вы уверены, что хотите заблокировать "{name}" навсегда? Восстановление будет невозможно.',
     
     profile_title: 'Мой профиль',
+    // Added missing translation key
+    profile_change_photo: 'Изменить фото',
     profile_logout: 'ВЫЙТИ ИЗ СИСТЕМЫ',
     
     settings_title: 'Настройки',
@@ -90,6 +94,8 @@ export const translations = {
     auth_name: 'Name',
     auth_login: 'Login',
     auth_pass: 'Password',
+    // Added missing translation key
+    auth_avatar_select: 'Select Avatar',
     auth_btn_login: 'Log In',
     auth_btn_register: 'Create Account',
     auth_switch_to_reg: "Don't have an account? Register",
@@ -124,6 +130,8 @@ export const translations = {
     admin_confirm_block: 'Are you sure you want to block "{name}" permanently? Restoration will be impossible.',
     
     profile_title: 'My Profile',
+    // Added missing translation key
+    profile_change_photo: 'Change Photo',
     profile_logout: 'LOG OUT',
     
     settings_title: 'Settings',
