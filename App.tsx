@@ -6,7 +6,6 @@ import { translations } from './translations';
 import { chatWithAssistant, summarizeConversation } from './geminiService';
 
 // --- Конфигурация Gun.js ---
-// Мы используем максимально широкий список реле-серверов для обеспечения P2P связи
 const gun = (window as any).Gun([
   'https://gun-manhattan.herokuapp.com/gun',
   'https://relay.peer.ooo/gun',
@@ -18,12 +17,11 @@ const gun = (window as any).Gun([
   'https://gunjs.herokuapp.com/gun'
 ]);
 
-// Используем уникальное пространство имен для этой версии
 const APP_DB_KEY = 'fluxur_v7_final_release';
+const SESSION_STORAGE_KEY = 'fluxur_v7_user_session';
 const db = gun.get(APP_DB_KEY);
 
 const DEFAULT_AVATAR = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTAwIDEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2I5YmRiZCIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNDAiIHI9IjIxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48cGF0aCBkPSJNMjAgOTAgQzIwIDYwIDgwIDYwIDgwIDkwIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48L3N2Zz4=";
-
 const DEVELOPER_LOGIN = 'stephan_rogovoy';
 
 const THEMES = {
@@ -43,8 +41,17 @@ const NAV_THEMES = {
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState<FluxurView>(FluxurView.AUTH);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  // Мгновенная загрузка сессии при инициализации состояния
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [activeView, setActiveView] = useState<FluxurView>(() => {
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+    return saved ? FluxurView.CHATS : FluxurView.AUTH;
+  });
+
   const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -65,7 +72,7 @@ export default function App() {
 
   // --- Глобальная синхронизация данных ---
   useEffect(() => {
-    // 1. Подписка на индекс всех пользователей (Discovery)
+    // Подписка на индекс пользователей
     db.get('user_directory').map().on((userId: string) => {
       if (userId) {
         db.get('users').get(userId).on((userData: any) => {
@@ -74,13 +81,19 @@ export default function App() {
               const filtered = prev.filter(u => u.id !== userData.id);
               return [...filtered, userData];
             });
+            // Если это данные текущего пользователя, обновляем их (фоновая синхронизация)
+            if (currentUser && userData.id === currentUser.id) {
+              const updated = { ...userData };
+              setCurrentUser(updated);
+              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updated));
+            }
             setIsSyncing(false);
           }
         });
       }
     });
 
-    // 2. Подписка на индекс всех чатов (Discovery)
+    // Подписка на индекс чатов
     db.get('chat_directory').map().on((chatId: string) => {
       if (chatId) {
         db.get('chats').get(chatId).on((chatData: any) => {
@@ -104,21 +117,6 @@ export default function App() {
       }
     });
 
-    // Авто-логин
-    const savedSession = localStorage.getItem('fluxur_session_v7');
-    if (savedSession) {
-      const parsed = JSON.parse(savedSession);
-      db.get('users').get(parsed.id).once((fresh: any) => {
-        if (fresh && fresh.id) {
-          setCurrentUser(fresh);
-          setActiveView(FluxurView.CHATS);
-        } else {
-          setCurrentUser(parsed);
-          setActiveView(FluxurView.CHATS);
-        }
-      });
-    }
-    
     setTimeout(() => setIsSyncing(false), 4000);
   }, []);
 
@@ -185,13 +183,12 @@ export default function App() {
             isBlocked: false
           };
           
-          // Сохраняем в Gun и добавляем в глобальный индекс
           db.get('users').get(newUser.id).put(newUser, (ack: any) => {
             if (!ack.err) {
               db.get('aliases').get(normalizedLogin).put(newUser.id);
-              db.get('user_directory').get(newUser.id).put(newUser.id); // Индексация для поиска
+              db.get('user_directory').get(newUser.id).put(newUser.id);
               setCurrentUser(newUser);
-              localStorage.setItem('fluxur_session_v7', JSON.stringify(newUser));
+              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(newUser));
               setActiveView(FluxurView.CHATS);
             } else {
               setAuthError("Network error: " + ack.err);
@@ -209,7 +206,7 @@ export default function App() {
                 return;
               }
               setCurrentUser(user);
-              localStorage.setItem('fluxur_session_v7', JSON.stringify(user));
+              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
               setActiveView(FluxurView.CHATS);
             } else {
               setAuthError(t('auth_err_invalid'));
@@ -226,11 +223,10 @@ export default function App() {
     if (!currentUser) return;
     const updated = { ...currentUser, [key]: value };
     setCurrentUser(updated);
-    localStorage.setItem('fluxur_session_v7', JSON.stringify(updated));
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updated));
     db.get('users').get(currentUser.id).put({ [key]: value });
   };
 
-  // Fix: Added handleBanUser function to update the banned users list in Gun.js.
   const handleBanUser = (userId: string, durationMs: number) => {
     if (!activeChat) return;
     const expiry = Date.now() + durationMs;
@@ -277,13 +273,19 @@ export default function App() {
       messages: JSON.stringify(newChat.messages)
     }, (ack: any) => {
       if (!ack.err) {
-        db.get('chat_directory').get(cid).put(cid); // Глобальная индексация чата
+        db.get('chat_directory').get(cid).put(cid);
       }
     });
     setActiveChatId(cid);
     setShowCreateModal(null);
     setNewName('');
     setNewHandle('');
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    setActiveView(FluxurView.AUTH);
   };
 
   const currentThemeClass = THEMES[currentUser?.theme || 'dark'];
@@ -525,7 +527,7 @@ export default function App() {
                 </div>
                 <h2 className="text-5xl font-black font-outfit mb-3 tracking-tighter">{currentUser?.name}</h2>
                 <p className="text-indigo-500 font-black tracking-[0.3em] text-sm mb-16 uppercase">@{currentUser?.login}</p>
-                <button onClick={() => { setCurrentUser(null); localStorage.removeItem('fluxur_session_v7'); setActiveView(FluxurView.AUTH); }} className="w-full py-6 bg-red-600/10 text-red-500 rounded-[2rem] font-black uppercase tracking-[0.4em] hover:bg-red-600 hover:text-white transition-all shadow-xl active:scale-95 text-xs">
+                <button onClick={handleLogout} className="w-full py-6 bg-red-600/10 text-red-500 rounded-[2rem] font-black uppercase tracking-[0.4em] hover:bg-red-600 hover:text-white transition-all shadow-xl active:scale-95 text-xs">
                   {t('profile_logout')}
                 </button>
              </div>
