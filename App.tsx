@@ -4,14 +4,19 @@ import { User, Message, Chat, FluxurView, FileAttachment } from './types';
 import { ICONS, COLORS } from './constants';
 import { translations } from './translations';
 import { chatWithAssistant, summarizeConversation } from './geminiService';
-import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 
 // --- Gun.js Global Instance ---
-// База v3 для чистого старта и глобальной синхронизации P2P
-const gun = (window as any).Gun(['https://gun-manhattan.herokuapp.com/gun', 'https://fluxur-relay.herokuapp.com/gun']);
+// Расширенный список стабильных узлов для надежной синхронизации P2P
+const gun = (window as any).Gun([
+  'https://gun-manhattan.herokuapp.com/gun',
+  'https://gun-relay.herokuapp.com/gun',
+  'https://relay.peer.ooo/gun',
+  'https://gun-us-west.herokuapp.com/gun',
+  'https://gun-eu-west.herokuapp.com/gun'
+]);
 const db = gun.get('fluxur_messenger_v3');
 
-// --- Default Avatar SVG as Base64 ---
+// --- Default Avatar SVG ---
 const DEFAULT_AVATAR = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTAwIDEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2I5YmRiZCIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNDAiIHI9IjIxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48cGF0aCBkPSJNMjAgOTAgQzIwIDYwIDgwIDYwIDgwIDkwIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48L3N2Zz4=";
 
 const AI_USER: User = {
@@ -33,7 +38,7 @@ export default function App() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [summary, setSummary] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(true);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -49,13 +54,14 @@ export default function App() {
 
   // --- Global Synchronization Logic ---
   useEffect(() => {
-    // Синхронизация списка всех пользователей для входа (P2P)
+    // Подгрузка пользователей для быстрого входа
     db.get('users').map().on((data: any) => {
       if (data && data.id) {
         setRegisteredUsers(prev => {
           const filtered = prev.filter(u => u.id !== data.id);
           return [...filtered, data];
         });
+        setIsSyncing(false);
       }
     });
 
@@ -78,15 +84,18 @@ export default function App() {
       }
     });
 
-    // Восстановление сессии из локального хранилища
+    // Восстановление сессии
     const savedSession = localStorage.getItem('fluxur_session_v3');
     if (savedSession) {
       setCurrentUser(JSON.parse(savedSession));
       setActiveView(FluxurView.CHATS);
     }
+
+    // Таймаут для индикатора синхронизации
+    const timer = setTimeout(() => setIsSyncing(false), 3000);
+    return () => clearTimeout(timer);
   }, []);
 
-  // Обновление локальной сессии при смене пользователя
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('fluxur_session_v3', JSON.stringify(currentUser));
@@ -100,7 +109,6 @@ export default function App() {
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
 
-  // Фильтр только своих чатов (глобальный поиск отключен по просьбе)
   const myChats = useMemo(() => {
     if (!currentUser) return [];
     return chats.filter(c => c.participants.includes(currentUser.id));
@@ -120,7 +128,6 @@ export default function App() {
     }
   }, [activeChat?.messages, isTyping]);
 
-  // Fix: Added missing updateCurrentUser function to fix errors on lines 483 and 486
   const updateCurrentUser = (updates: Partial<User>) => {
     if (!currentUser) return;
     const updatedUser = { ...currentUser, ...updates };
@@ -128,72 +135,96 @@ export default function App() {
     db.get('users').get(currentUser.id).put(updates);
   };
 
-  const handleAuth = () => {
+  const handleAuth = async () => {
     setAuthError('');
-    const normalizedLogin = authForm.login.trim();
+    const normalizedLogin = authForm.login.trim().toLowerCase();
+    
     if (authMode === 'register') {
       if (!authForm.login || !authForm.password || !authForm.name) {
         setAuthError(t('auth_err_fields'));
         return;
       }
-      if (registeredUsers.find(u => u.login.toLowerCase() === normalizedLogin.toLowerCase())) {
-        setAuthError(t('auth_err_taken'));
-        return;
-      }
-      const isDev = normalizedLogin.toLowerCase() === DEVELOPER_LOGIN.toLowerCase();
-      const newUser: User = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: authForm.name,
-        login: normalizedLogin,
-        password: authForm.password,
-        avatar: authForm.avatar || DEFAULT_AVATAR,
-        status: 'online',
-        isPremium: isDev, 
-        premiumStatus: isDev ? 'active' : 'none',
-        role: isDev ? 'developer' : 'user',
-        theme: 'dark',
-        language: 'ru',
-        isBlocked: false
-      };
-      
-      db.get('users').get(newUser.id).put(newUser);
-      setCurrentUser(newUser);
-      setActiveView(FluxurView.CHATS);
-    } else {
-      const user = registeredUsers.find(u => u.login.toLowerCase() === normalizedLogin.toLowerCase() && u.password === authForm.password);
-      if (user) {
-        if (user.isBlocked) {
-          setAuthError(t('auth_err_blocked'));
-          return;
-        }
-        setCurrentUser(user);
-        setActiveView(FluxurView.CHATS);
 
-        const aiChatId = `ai-${user.id}`;
-        if (!chats.find(c => c.id === aiChatId)) {
-          const newAiChat: Chat = {
-            id: aiChatId,
-            name: 'Fluxur AI',
-            type: 'ai',
-            participants: [user.id, AI_USER.id],
-            messages: [{ 
-              id: 'welcome', 
-              senderId: AI_USER.id, 
-              senderName: AI_USER.name,
-              text: t('ai_welcome').replace('{name}', user.name), 
-              timestamp: new Date() 
-            }],
-            creatorId: 'system'
+      // Проверка существования логина через глобальный индекс
+      db.get('aliases').get(normalizedLogin).once((userId: string) => {
+        if (userId) {
+          setAuthError(t('auth_err_taken'));
+        } else {
+          const isDev = normalizedLogin === DEVELOPER_LOGIN.toLowerCase();
+          const newUser: User = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: authForm.name,
+            login: normalizedLogin,
+            password: authForm.password,
+            avatar: authForm.avatar || DEFAULT_AVATAR,
+            status: 'online',
+            isPremium: isDev, 
+            premiumStatus: isDev ? 'active' : 'none',
+            role: isDev ? 'developer' : 'user',
+            theme: 'dark',
+            language: 'ru',
+            isBlocked: false
           };
-          db.get('chats').get(newAiChat.id).put({
-            ...newAiChat,
-            participants: JSON.stringify(newAiChat.participants),
-            messages: JSON.stringify(newAiChat.messages)
-          });
+          
+          db.get('users').get(newUser.id).put(newUser);
+          db.get('aliases').get(normalizedLogin).put(newUser.id); // Создаем глобальный индекс
+          setCurrentUser(newUser);
+          setActiveView(FluxurView.CHATS);
         }
-      } else {
-        setAuthError(t('auth_err_invalid'));
-      }
+      });
+    } else {
+      // Поиск пользователя через индекс алиасов для кросс-девайс входа
+      db.get('aliases').get(normalizedLogin).once((userId: string) => {
+        if (userId) {
+          db.get('users').get(userId).once((user: any) => {
+            if (user && user.password === authForm.password) {
+              if (user.isBlocked) {
+                setAuthError(t('auth_err_blocked'));
+                return;
+              }
+              setCurrentUser(user);
+              setActiveView(FluxurView.CHATS);
+              initAIChat(user);
+            } else {
+              setAuthError(t('auth_err_invalid'));
+            }
+          });
+        } else {
+          // Если индекс не сработал (редко), ищем в локальном списке
+          const localUser = registeredUsers.find(u => u.login.toLowerCase() === normalizedLogin && u.password === authForm.password);
+          if (localUser) {
+            setCurrentUser(localUser);
+            setActiveView(FluxurView.CHATS);
+          } else {
+            setAuthError(t('auth_err_invalid'));
+          }
+        }
+      });
+    }
+  };
+
+  const initAIChat = (user: User) => {
+    const aiChatId = `ai-${user.id}`;
+    if (!chats.find(c => c.id === aiChatId)) {
+      const newAiChat: Chat = {
+        id: aiChatId,
+        name: 'Fluxur AI',
+        type: 'ai',
+        participants: [user.id, AI_USER.id],
+        messages: [{ 
+          id: 'welcome', 
+          senderId: AI_USER.id, 
+          senderName: AI_USER.name,
+          text: t('ai_welcome').replace('{name}', user.name), 
+          timestamp: new Date() 
+        }],
+        creatorId: 'system'
+      };
+      db.get('chats').get(newAiChat.id).put({
+        ...newAiChat,
+        participants: JSON.stringify(newAiChat.participants),
+        messages: JSON.stringify(newAiChat.messages)
+      });
     }
   };
 
@@ -204,7 +235,6 @@ export default function App() {
     reader.onloadend = () => {
       const base64 = reader.result as string;
       if (isProfileUpdate) {
-        // Fix: Use the new updateCurrentUser helper
         updateCurrentUser({ avatar: base64 });
       } else {
         setAuthForm(prev => ({ ...prev, avatar: base64 }));
@@ -287,23 +317,6 @@ export default function App() {
 
   const isModerator = currentUser?.role === 'developer' || currentUser?.role === 'admin';
 
-  const getThemeClasses = () => {
-    switch(currentUser?.theme) {
-      case 'light': return 'bg-white text-slate-900';
-      case 'midnight': return 'bg-black text-indigo-100';
-      default: return 'bg-slate-950 text-slate-100';
-    }
-  };
-
-  const getCardClasses = () => {
-    const base = 'border transition-colors duration-300 rounded-3xl p-6 md:p-8 ';
-    switch(currentUser?.theme) {
-      case 'light': return base + 'bg-slate-50 border-slate-200 shadow-sm';
-      case 'midnight': return base + 'bg-slate-900 border-indigo-900/50 shadow-2xl shadow-indigo-500/10';
-      default: return base + 'bg-slate-900 border-slate-800 shadow-xl';
-    }
-  };
-
   if (activeView === FluxurView.AUTH) {
     return (
       <div className="flex flex-col items-center justify-center h-screen w-screen bg-slate-950 p-6 font-inter text-white">
@@ -314,22 +327,16 @@ export default function App() {
             <p className="text-slate-400 text-sm mt-1">{t('tagline')}</p>
           </div>
           
-          <div className="space-y-5 relative z-10">
+          <div className="space-y-6 relative z-10">
             {authMode === 'register' && (
-              <div className="flex flex-col items-center mb-4">
-                <input 
-                  type="file" 
-                  ref={avatarInputRef} 
-                  className="hidden" 
-                  accept="image/*" 
-                  onChange={(e) => handleAvatarSelect(e)} 
-                />
+              <div className="flex flex-col items-center mb-2">
+                <input type="file" ref={avatarInputRef} className="hidden" accept="image/*" onChange={(e) => handleAvatarSelect(e)} />
                 <div 
                   onClick={(e) => { e.stopPropagation(); avatarInputRef.current?.click(); }} 
-                  className="w-24 h-24 rounded-full border-4 border-slate-800 bg-slate-800 flex items-center justify-center overflow-hidden cursor-pointer hover:border-indigo-500 transition-all group shadow-2xl relative"
+                  className="w-24 h-24 rounded-full border-4 border-slate-800 bg-slate-800 flex items-center justify-center overflow-hidden cursor-pointer hover:border-indigo-500 transition-all group relative z-50"
                 >
                   <img src={authForm.avatar} className="w-full h-full object-cover" alt="Avatar Preview" />
-                  <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <ICONS.Plus className="w-8 h-8 text-white" />
                   </div>
                 </div>
@@ -337,12 +344,12 @@ export default function App() {
               </div>
             )}
             
-            <div className="space-y-4">
+            <div className="space-y-4 relative z-10">
               {authMode === 'register' && (
                 <input 
                   type="text" 
                   placeholder={t('auth_name')} 
-                  className="w-full bg-slate-800/50 border border-slate-700/50 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white" 
+                  className="w-full bg-slate-800/80 border border-slate-700 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white relative z-10" 
                   value={authForm.name} 
                   onChange={e => setAuthForm({...authForm, name: e.target.value})} 
                 />
@@ -351,7 +358,7 @@ export default function App() {
               <input 
                 type="text" 
                 placeholder={t('auth_login')} 
-                className="w-full bg-slate-800/50 border border-slate-700/50 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white" 
+                className="w-full bg-slate-800/80 border border-slate-700 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white relative z-10" 
                 value={authForm.login} 
                 onChange={e => setAuthForm({...authForm, login: e.target.value})} 
               />
@@ -359,27 +366,35 @@ export default function App() {
               <input 
                 type="password" 
                 placeholder={t('auth_pass')} 
-                className="w-full bg-slate-800/50 border border-slate-700/50 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white" 
+                className="w-full bg-slate-800/80 border border-slate-700 rounded-xl py-3 px-4 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-white relative z-10" 
                 value={authForm.password} 
                 onChange={e => setAuthForm({...authForm, password: e.target.value})} 
               />
             </div>
 
-            {authError && <p className="text-red-400 text-xs text-center animate-pulse">{authError}</p>}
+            {authError && <p className="text-red-400 text-xs text-center font-medium">{authError}</p>}
             
             <button 
               onClick={handleAuth} 
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all active:scale-95"
+              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all active:scale-95 relative z-10"
             >
               {authMode === 'login' ? t('auth_btn_login') : t('auth_btn_register')}
             </button>
             
-            <p className="text-slate-500 text-xs text-center cursor-pointer hover:text-indigo-400 transition-colors py-2" onClick={() => {
-              setAuthMode(authMode === 'login' ? 'register' : 'login');
-              setAuthError('');
-            }}>
-              {authMode === 'login' ? t('auth_switch_to_reg') : t('auth_switch_to_login')}
-            </p>
+            <div className="flex flex-col gap-2 items-center relative z-10">
+              <p className="text-slate-500 text-xs cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => {
+                setAuthMode(authMode === 'login' ? 'register' : 'login');
+                setAuthError('');
+              }}>
+                {authMode === 'login' ? t('auth_switch_to_reg') : t('auth_switch_to_login')}
+              </p>
+              {isSyncing && (
+                <div className="flex items-center gap-2 mt-2">
+                  <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Fluxur Syncing...</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -387,7 +402,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex h-screen w-screen overflow-hidden font-inter transition-colors duration-300 ${getThemeClasses()}`}>
+    <div className={`flex h-screen w-screen overflow-hidden font-inter transition-colors duration-300 ${currentUser?.theme === 'light' ? 'bg-white text-slate-900' : (currentUser?.theme === 'midnight' ? 'bg-black text-indigo-100' : 'bg-slate-950 text-slate-100')}`}>
       <nav className={`w-20 border-r flex flex-col items-center py-8 gap-6 shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentUser?.theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-900 border-slate-800'}`}>
         <div className="w-12 h-12 cursor-pointer hover:scale-110 transition-transform mb-4" onClick={() => setActiveView(FluxurView.CHATS)}><ICONS.Logo /></div>
         <button onClick={() => setActiveView(FluxurView.CHATS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.CHATS ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`} title={t('sidebar_chats')}><ICONS.Message /></button>
@@ -466,7 +481,7 @@ export default function App() {
         ) : activeView === FluxurView.PROFILE ? (
           <div className="flex-1 p-8 md:p-12 max-w-2xl mx-auto space-y-12 overflow-y-auto">
             <h1 className="text-4xl font-outfit font-black">{t('profile_title')}</h1>
-            <div className={getCardClasses() + " flex-col md:flex-row flex items-center gap-8"}>
+            <div className={`border transition-colors duration-300 rounded-3xl p-6 md:p-8 flex-col md:flex-row flex items-center gap-8 ${currentUser?.theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-900 border-slate-800 shadow-xl'}`}>
               <div className="relative group cursor-pointer" onClick={() => profileAvatarRef.current?.click()}>
                 <input type="file" ref={profileAvatarRef} className="hidden" accept="image/*" onChange={(e) => handleAvatarSelect(e, true)} />
                 <img src={currentUser?.avatar || DEFAULT_AVATAR} className="w-32 h-32 rounded-3xl shadow-2xl transition-transform group-hover:scale-105 object-cover" alt="Profile" />
