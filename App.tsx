@@ -61,6 +61,7 @@ export default function App() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const profileAvatarInputRef = useRef<HTMLInputElement>(null);
 
   const [newHandle, setNewHandle] = useState('');
   const [chatSearchQuery, setChatSearchQuery] = useState('');
@@ -150,6 +151,18 @@ export default function App() {
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => setAuthForm(prev => ({ ...prev, avatar: reader.result as string }));
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleProfileAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && currentUser) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        updateSetting('avatar', base64);
+      };
       reader.readAsDataURL(file);
     }
   };
@@ -521,9 +534,13 @@ export default function App() {
           <div className="flex-1 p-16 flex items-center justify-center animate-in zoom-in-90 duration-500">
              <div className="bg-slate-900/40 border border-slate-800 p-20 rounded-[5rem] text-center max-w-lg w-full shadow-[0_40px_100px_rgba(0,0,0,0.6)] backdrop-blur-md relative overflow-hidden group">
                 <div className="absolute inset-0 bg-indigo-600/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                <div className="relative inline-block mb-10">
+                <input type="file" ref={profileAvatarInputRef} className="hidden" accept="image/*" onChange={handleProfileAvatarSelect} />
+                <div className="relative inline-block mb-10 cursor-pointer group/avatar" onClick={() => profileAvatarInputRef.current?.click()}>
+                  <div className="absolute inset-0 bg-black/40 rounded-[4rem] flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity z-10">
+                    <span className="text-white text-[10px] font-black uppercase tracking-widest">Изменить</span>
+                  </div>
                   <img src={currentUser?.avatar} className="w-48 h-48 rounded-[4rem] shadow-2xl border-4 border-indigo-600/20 object-cover group-hover:scale-105 transition-transform" />
-                  {currentUser?.isPremium && <div className="absolute -top-6 -right-6 bg-amber-500 text-white p-4 rounded-3xl shadow-2xl animate-bounce"><ICONS.Sparkles className="w-8 h-8" /></div>}
+                  {currentUser?.isPremium && <div className="absolute -top-6 -right-6 bg-amber-500 text-white p-4 rounded-3xl shadow-2xl animate-bounce z-20"><ICONS.Sparkles className="w-8 h-8" /></div>}
                 </div>
                 <h2 className="text-5xl font-black font-outfit mb-3 tracking-tighter">{currentUser?.name}</h2>
                 <p className="text-indigo-500 font-black tracking-[0.3em] text-sm mb-16 uppercase">@{currentUser?.login}</p>
