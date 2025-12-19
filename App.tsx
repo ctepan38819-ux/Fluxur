@@ -5,7 +5,7 @@ import { ICONS, COLORS } from './constants';
 import { translations } from './translations';
 import { chatWithAssistant, summarizeConversation } from './geminiService';
 
-// --- Конфигурация Gun.js ---
+// --- Конфигурация Gun.js с максимально широким списком реле для стабильности ---
 const gun = (window as any).Gun([
   'https://gun-manhattan.herokuapp.com/gun',
   'https://relay.peer.ooo/gun',
@@ -14,11 +14,13 @@ const gun = (window as any).Gun([
   'https://fluxur-relay-p2p.herokuapp.com/gun',
   'https://peer.wall.org/gun',
   'https://dletta.herokuapp.com/gun',
+  'https://gun-ams1.marda.io/gun',
+  'https://gun-sjc1.marda.io/gun',
   'https://gunjs.herokuapp.com/gun'
 ]);
 
-const APP_DB_KEY = 'fluxur_v7_final_release';
-const SESSION_STORAGE_KEY = 'fluxur_v7_user_session';
+const APP_DB_KEY = 'fluxur_v10_ultimate_mesh'; // Новый уникальный ключ для чистой синхронизации
+const SESSION_STORAGE_KEY = 'fluxur_v10_user_session';
 const db = gun.get(APP_DB_KEY);
 
 const DEFAULT_AVATAR = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTAwIDEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2I5YmRiZCIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNDAiIHI9IjIxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48cGF0aCBkPSJNMjAgOTAgQzIwIDYwIDgwIDYwIDgwIDkwIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMiIGZpbGw9Im5vbmUiLz48L3N2Zz4=";
@@ -41,7 +43,6 @@ const NAV_THEMES = {
 };
 
 export default function App() {
-  // Мгновенная загрузка сессии при инициализации состояния
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = localStorage.getItem(SESSION_STORAGE_KEY);
     return saved ? JSON.parse(saved) : null;
@@ -71,55 +72,74 @@ export default function App() {
   const [authForm, setAuthForm] = useState({ name: '', login: '', password: '', avatar: DEFAULT_AVATAR });
   const [authError, setAuthError] = useState('');
 
-  // --- Глобальная синхронизация данных ---
+  // --- Ядро Синхронизации (Discovery Engine) ---
   useEffect(() => {
-    // Подписка на индекс пользователей
-    db.get('user_directory').map().on((userId: string) => {
-      if (userId) {
-        db.get('users').get(userId).on((userData: any) => {
-          if (userData && userData.id) {
-            setRegisteredUsers(prev => {
-              const filtered = prev.filter(u => u.id !== userData.id);
-              return [...filtered, userData];
-            });
-            // Если это данные текущего пользователя, обновляем их (фоновая синхронизация)
-            if (currentUser && userData.id === currentUser.id) {
-              const updated = { ...userData };
-              setCurrentUser(updated);
-              localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updated));
-            }
-            setIsSyncing(false);
-          }
-        });
-      }
-    });
-
-    // Подписка на индекс чатов
-    db.get('chat_directory').map().on((chatId: string) => {
-      if (chatId) {
-        db.get('chats').get(chatId).on((chatData: any) => {
-          if (chatData && chatData.id) {
-            try {
-              const parsedChat: Chat = {
-                ...chatData,
-                participants: JSON.parse(chatData.participants || '[]'),
-                bannedUsers: JSON.parse(chatData.bannedUsers || '{}'),
-                messages: JSON.parse(chatData.messages || '[]')
-              };
-              setChats(prev => {
-                const filtered = prev.filter(c => c.id !== parsedChat.id);
-                return [...filtered, parsedChat];
+    const syncUsers = () => {
+      db.get('discovery').get('users').map().on((userId) => {
+        if (userId && typeof userId === 'string') {
+          db.get('users').get(userId).on((userData: any) => {
+            if (userData && userData.id) {
+              setRegisteredUsers(prev => {
+                const filtered = prev.filter(u => u.id !== userData.id);
+                return [...filtered, { ...userData, isBlocked: !!userData.isBlocked }];
               });
-            } catch (e) { console.error("Sync error", e); }
-          } else if (chatData === null) {
-            setChats(prev => prev.filter(c => c.id !== chatId));
-          }
-        });
-      }
-    });
+              if (currentUser && userData.id === currentUser.id) {
+                const updated = { ...userData };
+                setCurrentUser(updated);
+                localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updated));
+              }
+            }
+          });
+        }
+      });
+    };
 
-    setTimeout(() => setIsSyncing(false), 4000);
+    const syncChats = () => {
+      db.get('discovery').get('chats').map().on((chatId) => {
+        if (chatId && typeof chatId === 'string') {
+          db.get('chats').get(chatId).on((chatData: any) => {
+            if (chatData && chatData.id) {
+              try {
+                const parsedChat: Chat = {
+                  ...chatData,
+                  participants: JSON.parse(chatData.participants || '[]'),
+                  bannedUsers: JSON.parse(chatData.bannedUsers || '{}'),
+                  messages: JSON.parse(chatData.messages || '[]'),
+                  isBlocked: !!chatData.isBlocked
+                };
+                setChats(prev => {
+                  const filtered = prev.filter(c => c.id !== parsedChat.id);
+                  return [...filtered, parsedChat];
+                });
+              } catch (e) { console.error("Sync decoding error", e); }
+            }
+          });
+        }
+      });
+    };
+
+    syncUsers();
+    syncChats();
+
+    const timer = setTimeout(() => setIsSyncing(false), 5000);
+    return () => clearTimeout(timer);
   }, []);
+
+  // Периодический "пульс" для поддержания соединения (каждые 30 сек)
+  useEffect(() => {
+    const pulse = setInterval(() => {
+      if (currentUser) {
+        db.get('discovery').get('users').get(currentUser.id).put(currentUser.id);
+      }
+    }, 30000);
+    return () => clearInterval(pulse);
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [chats, activeChatId]);
 
   const langCode = currentUser?.language || 'ru';
   const t = (key: string) => {
@@ -129,22 +149,26 @@ export default function App() {
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
 
-  const myChats = useMemo(() => {
+  const myVisibleChats = useMemo(() => {
     if (!currentUser) return [];
     return chats.filter(c => {
       const isDev = currentUser.role === 'developer';
       if (c.isBlocked && !isDev) return false;
       const isParticipant = c.participants.includes(currentUser.id);
-      const banExpiry = c.bannedUsers?.[currentUser.id] || 0;
-      return isParticipant && banExpiry < Date.now();
+      const isPublicChannel = c.type === 'channel';
+      return isParticipant || isPublicChannel;
     });
   }, [chats, currentUser]);
 
   const searchResults = useMemo(() => {
     const q = chatSearchQuery.toLowerCase().trim();
-    if (!q) return myChats;
-    return myChats.filter(c => c.name.toLowerCase().includes(q) || c.handle?.toLowerCase().includes(q));
-  }, [myChats, chatSearchQuery]);
+    if (!q) return myVisibleChats;
+    // Поиск по всем известным системе чатам
+    return chats.filter(c => 
+      c.name.toLowerCase().includes(q) || 
+      (c.handle && c.handle.toLowerCase().includes(q))
+    );
+  }, [myVisibleChats, chats, chatSearchQuery]);
 
   const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -177,13 +201,14 @@ export default function App() {
         return;
       }
 
-      db.get('aliases').get(normalizedLogin).once((userId: string) => {
+      db.get('aliases').get(normalizedLogin).once((userId) => {
         if (userId) {
           setAuthError(t('auth_err_taken'));
         } else {
           const isDev = normalizedLogin === DEVELOPER_LOGIN;
+          const uid = Math.random().toString(36).substr(2, 9);
           const newUser: User = {
-            id: Math.random().toString(36).substr(2, 9),
+            id: uid,
             name: authForm.name,
             login: normalizedLogin,
             password: authForm.password,
@@ -196,10 +221,10 @@ export default function App() {
             isBlocked: false
           };
           
-          db.get('users').get(newUser.id).put(newUser, (ack: any) => {
+          db.get('users').get(uid).put(newUser, (ack: any) => {
             if (!ack.err) {
-              db.get('aliases').get(normalizedLogin).put(newUser.id);
-              db.get('user_directory').get(newUser.id).put(newUser.id);
+              db.get('aliases').get(normalizedLogin).put(uid);
+              db.get('discovery').get('users').get(uid).put(uid);
               setCurrentUser(newUser);
               localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(newUser));
               setActiveView(FluxurView.CHATS);
@@ -240,45 +265,44 @@ export default function App() {
     db.get('users').get(currentUser.id).put({ [key]: value });
   };
 
-  const handleBanUser = (userId: string, durationMs: number) => {
-    if (!activeChat) return;
-    const expiry = Date.now() + durationMs;
-    const updatedBanned = { ...(activeChat.bannedUsers || {}), [userId]: expiry };
-    db.get('chats').get(activeChat.id).put({
-      bannedUsers: JSON.stringify(updatedBanned)
-    });
-  };
-
   const handleSendMessage = useCallback(async () => {
     if (!inputText.trim() || !currentUser || !activeChat) return;
+    if (activeChat.type === 'channel' && activeChat.creatorId !== currentUser.id && currentUser.role !== 'developer') return;
+
     const newMessage: Message = {
-      id: Date.now().toString(),
+      id: Math.random().toString(36).substr(2, 9) + Date.now(),
       senderId: currentUser.id,
       senderName: currentUser.name,
       text: inputText,
       timestamp: new Date()
     };
-    const updatedMessages = [...activeChat.messages, newMessage];
+    
+    const updatedMessages = [...activeChat.messages, newMessage].slice(-200); // Ограничение истории для P2P
+    
     db.get('chats').get(activeChat.id).put({
       messages: JSON.stringify(updatedMessages),
       lastMessage: inputText
     });
+    
     setInputText('');
   }, [inputText, activeChat, currentUser]);
 
   const handleCreateChat = () => {
     if (!newName.trim() || !currentUser || !showCreateModal) return;
     const cid = Math.random().toString(36).substr(2, 9);
+    const handle = newHandle ? `@${newHandle.replace('@', '').toLowerCase()}` : undefined;
+    
     const newChat: Chat = {
       id: cid,
       name: newName.trim(),
-      handle: newHandle ? `@${newHandle.replace('@', '')}` : undefined,
+      handle: handle,
       type: showCreateModal,
       participants: [currentUser.id],
       bannedUsers: {},
       messages: [],
       creatorId: currentUser.id
     };
+
     db.get('chats').get(cid).put({
       ...newChat,
       participants: JSON.stringify(newChat.participants),
@@ -286,13 +310,27 @@ export default function App() {
       messages: JSON.stringify(newChat.messages)
     }, (ack: any) => {
       if (!ack.err) {
-        db.get('chat_directory').get(cid).put(cid);
+        db.get('discovery').get('chats').get(cid).put(cid);
+        if (handle) db.get('handles').get(handle).put(cid);
       }
     });
+
     setActiveChatId(cid);
     setShowCreateModal(null);
     setNewName('');
     setNewHandle('');
+  };
+
+  const handleJoinChat = (chat: Chat) => {
+    if (!currentUser || chat.participants.includes(currentUser.id)) {
+       setActiveChatId(chat.id);
+       return;
+    }
+    const updatedParticipants = [...chat.participants, currentUser.id];
+    db.get('chats').get(chat.id).put({
+      participants: JSON.stringify(updatedParticipants)
+    });
+    setActiveChatId(chat.id);
   };
 
   const handleLogout = () => {
@@ -338,7 +376,7 @@ export default function App() {
           {isSyncing && (
             <div className="absolute -bottom-16 left-0 right-0 flex justify-center items-center gap-3 opacity-60">
               <div className="w-2.5 h-2.5 bg-indigo-500 rounded-full animate-ping" />
-              <span className="text-[10px] uppercase tracking-[0.4em] font-black animate-pulse">Network Syncing...</span>
+              <span className="text-[10px] uppercase tracking-[0.4em] font-black animate-pulse">Syncing Global Mesh...</span>
             </div>
           )}
         </div>
@@ -356,6 +394,7 @@ export default function App() {
           <button onClick={() => setActiveView(FluxurView.ADMIN)} className={`p-4 rounded-3xl transition-all ${activeView === FluxurView.ADMIN ? 'bg-amber-500 text-white shadow-2xl scale-110' : 'opacity-30 hover:opacity-100 hover:scale-105'}`}><ICONS.Sparkles /></button>
         )}
         <div className="flex-1" />
+        <button onClick={() => window.location.reload()} className="p-4 opacity-20 hover:opacity-100 transition-all hover:rotate-180" title="Force Sync"><ICONS.Plus className="w-6 h-6 rotate-45" /></button>
         <button onClick={() => setActiveView(FluxurView.SETTINGS)} className={`p-4 rounded-3xl transition-all ${activeView === FluxurView.SETTINGS ? 'bg-indigo-600 text-white shadow-2xl scale-110' : 'opacity-30 hover:opacity-100 hover:scale-105'}`}><ICONS.Settings /></button>
       </nav>
 
@@ -367,24 +406,34 @@ export default function App() {
                 <div className="flex items-center justify-between mb-10">
                   <h2 className="text-3xl font-black font-outfit tracking-tighter">{t('appName')}</h2>
                   <div className="flex gap-3">
-                    <button onClick={() => setShowCreateModal('group')} className="p-3 bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white rounded-2xl transition-all"><ICONS.Plus className="w-5 h-5" /></button>
-                    <button onClick={() => setShowCreateModal('channel')} className="p-3 bg-emerald-600/10 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-2xl transition-all"><ICONS.Message className="w-5 h-5" /></button>
+                    <button onClick={() => setShowCreateModal('group')} title="New Group" className="p-3 bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white rounded-2xl transition-all"><ICONS.Plus className="w-5 h-5" /></button>
+                    <button onClick={() => setShowCreateModal('channel')} title="New Channel" className="p-3 bg-emerald-600/10 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-2xl transition-all"><ICONS.Message className="w-5 h-5" /></button>
                   </div>
                 </div>
                 <div className="relative mb-8">
                   <ICONS.Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                   <input type="text" placeholder={t('chat_search')} className="w-full text-sm py-4 pl-12 pr-6 rounded-2xl bg-slate-800/20 border border-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium" value={chatSearchQuery} onChange={(e) => setChatSearchQuery(e.target.value)} />
                 </div>
-                <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-                  {searchResults.map(chat => (
-                    <div key={chat.id} onClick={() => setActiveChatId(chat.id)} className={`p-5 rounded-[2rem] cursor-pointer transition-all border ${activeChatId === chat.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xl scale-[0.97]' : 'hover:bg-indigo-500/5 border-transparent hover:scale-[0.99]'}`}>
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="font-black text-sm truncate">{chat.name}</span>
-                        {chat.isBlocked && <span className="text-[7px] bg-red-600 text-white px-2 py-0.5 rounded-full font-black uppercase">Blocked</span>}
+                <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+                  {searchResults.map(chat => {
+                    const isJoined = chat.participants.includes(currentUser?.id || '');
+                    return (
+                      <div key={chat.id} 
+                        onClick={() => handleJoinChat(chat)} 
+                        className={`p-5 rounded-[2rem] cursor-pointer transition-all border ${activeChatId === chat.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xl scale-[0.97]' : 'hover:bg-indigo-500/5 border-transparent hover:scale-[0.99]'} relative overflow-hidden group`}>
+                        <div className="flex justify-between items-start mb-1">
+                          <span className="font-black text-sm truncate">{chat.name}</span>
+                          {!isJoined && <span className="text-[7px] bg-indigo-400 text-white px-2 py-0.5 rounded-full font-black uppercase">Public</span>}
+                        </div>
+                        <p className={`text-[11px] truncate ${activeChatId === chat.id ? 'text-indigo-100' : 'text-slate-500'}`}>{chat.lastMessage || t('msg_no_messages')}</p>
+                        {!isJoined && (
+                          <div className="absolute inset-0 bg-indigo-600/95 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-white">Open Chat</span>
+                          </div>
+                        )}
                       </div>
-                      <p className={`text-[11px] truncate ${activeChatId === chat.id ? 'text-indigo-100' : 'text-slate-500'}`}>{chat.lastMessage || t('msg_no_messages')}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {searchResults.length === 0 && (
                     <div className="text-center py-24 opacity-20">
                       <ICONS.Logo className="w-16 h-16 mx-auto mb-4 grayscale" />
@@ -394,6 +443,7 @@ export default function App() {
                 </div>
               </div>
             </aside>
+
             <main className={`flex-1 flex-col ${activeChatId ? 'flex' : 'hidden md:flex'}`}>
               {activeChat ? (
                 <>
@@ -416,7 +466,8 @@ export default function App() {
                       </button>
                     )}
                   </header>
-                  <div ref={scrollRef} className="flex-1 overflow-y-auto p-10 space-y-8">
+
+                  <div ref={scrollRef} className="flex-1 overflow-y-auto p-10 space-y-8 custom-scrollbar">
                     {activeChat.isBlocked && currentUser?.role !== 'developer' ? (
                       <div className="flex flex-col items-center justify-center h-full text-red-500 gap-6 opacity-40 select-none">
                         <ICONS.Logo className="w-24 h-24 grayscale animate-pulse" />
@@ -434,12 +485,19 @@ export default function App() {
                       ))
                     )}
                   </div>
+
                   {!activeChat.isBlocked && (
                     <footer className="p-10 pt-0">
-                      <div className="border border-slate-800 rounded-[2.5rem] p-3 flex items-center gap-3 bg-slate-900/60 shadow-inner backdrop-blur-2xl">
-                        <input value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder={t('chat_input_placeholder')} className="flex-1 bg-transparent border-none outline-none px-6 py-4 text-sm font-semibold" />
-                        <button onClick={handleSendMessage} className="p-5 bg-indigo-600 text-white rounded-[1.5rem] shadow-2xl hover:bg-indigo-500 hover:rotate-12 transition-all active:scale-75"><ICONS.Send className="w-6 h-6" /></button>
-                      </div>
+                      {activeChat.type === 'channel' && activeChat.creatorId !== currentUser?.id && currentUser?.role !== 'developer' ? (
+                        <div className="text-center py-6 opacity-40 text-[10px] font-black uppercase tracking-[0.3em] border border-dashed border-slate-700 rounded-[2rem]">
+                          {t('chat_channel_readonly')}
+                        </div>
+                      ) : (
+                        <div className="border border-slate-800 rounded-[2.5rem] p-3 flex items-center gap-3 bg-slate-900/60 shadow-inner backdrop-blur-2xl">
+                          <input value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder={t('chat_input_placeholder')} className="flex-1 bg-transparent border-none outline-none px-6 py-4 text-sm font-semibold" />
+                          <button onClick={handleSendMessage} className="p-5 bg-indigo-600 text-white rounded-[1.5rem] shadow-2xl hover:bg-indigo-500 hover:rotate-12 transition-all active:scale-75"><ICONS.Send className="w-6 h-6" /></button>
+                        </div>
+                      )}
                     </footer>
                   )}
                 </>
@@ -453,7 +511,7 @@ export default function App() {
             </main>
           </>
         ) : activeView === FluxurView.ADMIN ? (
-          <div className="flex-1 p-16 max-w-7xl mx-auto overflow-y-auto space-y-16 animate-in slide-in-from-right-10">
+          <div className="flex-1 p-16 max-w-7xl mx-auto overflow-y-auto space-y-16 animate-in slide-in-from-right-10 custom-scrollbar">
             <h1 className="text-7xl font-black font-outfit tracking-tighter uppercase mb-20">{t('admin_title')}</h1>
             <div className="grid lg:grid-cols-2 gap-16">
               <section className="space-y-8">
@@ -500,9 +558,8 @@ export default function App() {
             </div>
           </div>
         ) : activeView === FluxurView.SETTINGS ? (
-          <div className="flex-1 p-16 max-w-3xl mx-auto space-y-20 overflow-y-auto animate-in slide-in-from-bottom-10">
+          <div className="flex-1 p-16 max-w-3xl mx-auto space-y-20 overflow-y-auto animate-in slide-in-from-bottom-10 custom-scrollbar">
             <h1 className="text-7xl font-black font-outfit tracking-tighter uppercase">{t('settings_title')}</h1>
-            
             <div className="space-y-16">
               <section className="space-y-8">
                 <h3 className="text-xs font-black uppercase tracking-[0.5em] text-slate-500">{t('settings_theme')}</h3>
@@ -514,17 +571,12 @@ export default function App() {
                   ))}
                 </div>
               </section>
-
               <section className="space-y-8">
                 <h3 className="text-xs font-black uppercase tracking-[0.5em] text-slate-500">{t('settings_language')}</h3>
                 <div className="flex flex-col gap-6">
                   <div className="flex gap-4">
                     <button onClick={() => updateSetting('language', 'ru')} className={`flex-1 py-5 rounded-[1.5rem] font-black transition-all text-sm uppercase tracking-widest ${currentUser?.language === 'ru' ? 'bg-indigo-600 shadow-2xl scale-105' : 'bg-slate-800 opacity-40 hover:opacity-100'}`}>Русский</button>
                     <button onClick={() => updateSetting('language', 'en')} className={`flex-1 py-5 rounded-[1.5rem] font-black transition-all text-sm uppercase tracking-widest ${currentUser?.language === 'en' ? 'bg-indigo-600 shadow-2xl scale-105' : 'bg-slate-800 opacity-40 hover:opacity-100'}`}>English</button>
-                  </div>
-                  <div className="space-y-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-2">{t('settings_lang_any')}</p>
-                    <input type="text" placeholder="Spanish, French, Japanese..." className="w-full bg-slate-900/50 border-2 border-slate-800 rounded-[1.5rem] py-5 px-8 outline-none focus:border-indigo-500 transition-all font-bold text-lg" value={currentUser?.language} onChange={e => updateSetting('language', e.target.value.toLowerCase())} />
                   </div>
                 </div>
               </section>
@@ -552,6 +604,7 @@ export default function App() {
         )}
       </div>
 
+      {/* Модальные окна */}
       {showModModal && activeChat && (
         <div className="fixed inset-0 bg-black/98 backdrop-blur-3xl z-50 flex items-center justify-center p-6 animate-in fade-in duration-500">
           <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-[4.5rem] p-16 overflow-hidden flex flex-col max-h-[90vh] shadow-[0_50px_150px_rgba(0,0,0,1)] relative">
@@ -559,7 +612,6 @@ export default function App() {
               <h3 className="text-4xl font-black font-outfit uppercase tracking-tighter">{t('mod_title')}</h3>
               <button onClick={() => setShowModModal(false)} className="w-14 h-14 flex items-center justify-center bg-slate-800 rounded-full hover:bg-red-600 transition-all text-3xl font-light">&times;</button>
             </div>
-            
             <div className="flex-1 overflow-y-auto pr-4 space-y-10 custom-scrollbar">
               <div className="space-y-6">
                 <h4 className="text-[11px] font-black uppercase tracking-[0.5em] text-slate-500 ml-2">{t('mod_participants')}</h4>
@@ -575,19 +627,13 @@ export default function App() {
                           <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">@{u.login}</p>
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button onClick={() => handleBanUser(u.id, 86400000)} className="text-[9px] px-4 py-2.5 bg-amber-600/10 text-amber-500 rounded-xl font-black uppercase hover:bg-amber-600 hover:text-white transition-all">{t('mod_ban_1d')}</button>
-                        <button onClick={() => handleBanUser(u.id, 604800000)} className="text-[9px] px-4 py-2.5 bg-orange-600/10 text-orange-500 rounded-xl font-black uppercase hover:bg-orange-600 hover:text-white transition-all">{t('mod_ban_1w')}</button>
-                        <button onClick={() => handleBanUser(u.id, 31536000000)} className="text-[9px] px-4 py-2.5 bg-red-600/10 text-red-500 rounded-xl font-black uppercase hover:bg-red-600 hover:text-white transition-all">{t('mod_ban_1y')}</button>
-                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
-
             <div className="mt-12 pt-10 border-t border-slate-800">
-              <button onClick={() => { if(confirm(t('mod_delete_chat') + '?')) { db.get('chats').get(activeChat.id).put(null as any); setActiveChatId(null); setShowModModal(false); } }} className="w-full py-6 bg-red-600/10 text-red-500 rounded-[2.5rem] font-black uppercase tracking-[0.4em] hover:bg-red-600 hover:text-white transition-all shadow-2xl active:scale-95 text-[10px]">
+              <button onClick={() => { if(confirm(t('mod_delete_chat') + '?')) { db.get('chats').get(activeChat.id).put(null as any); db.get('discovery').get('chats').get(activeChat.id).put(null as any); setActiveChatId(null); setShowModModal(false); } }} className="w-full py-6 bg-red-600/10 text-red-500 rounded-[2.5rem] font-black uppercase tracking-[0.4em] hover:bg-red-600 hover:text-white transition-all shadow-2xl active:scale-95 text-[10px]">
                 {t('mod_delete_chat')}
               </button>
             </div>
@@ -602,11 +648,14 @@ export default function App() {
             <div className="space-y-6 mb-12">
               <div className="space-y-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-2">Display Name</p>
-                <input type="text" placeholder="e.g. Fluxur Hub..." className="w-full bg-slate-800 border-2 border-slate-700 rounded-[1.5rem] py-5 px-8 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newName} onChange={e => setNewName(e.target.value)} />
+                <input type="text" placeholder="e.g. My Awesome Chat" className="w-full bg-slate-800 border-2 border-slate-700 rounded-[1.5rem] py-5 px-8 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newName} onChange={e => setNewName(e.target.value)} />
               </div>
               <div className="space-y-3">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-2">Handle (ID)</p>
-                <input type="text" placeholder="e.g. news..." className="w-full bg-slate-800 border-2 border-slate-700 rounded-[1.5rem] py-5 px-8 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newHandle} onChange={e => setNewHandle(e.target.value)} />
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-2">Handle (Unique ID)</p>
+                <div className="relative">
+                  <span className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-500 font-bold">@</span>
+                  <input type="text" placeholder="news..." className="w-full bg-slate-800 border-2 border-slate-700 rounded-[1.5rem] py-5 pl-10 pr-8 outline-none focus:border-indigo-500 text-white font-bold text-lg transition-all" value={newHandle} onChange={e => setNewHandle(e.target.value)} />
+                </div>
               </div>
             </div>
             <div className="flex gap-4">
