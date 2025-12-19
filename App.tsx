@@ -93,14 +93,40 @@ export default function App() {
 
   const [newHandle, setNewHandle] = useState('');
 
+  // --- Persistence: Initialization ---
   useEffect(() => {
     const savedUsers = localStorage.getItem('fluxur_users');
     const savedChats = localStorage.getItem('fluxur_chats');
+    const savedSession = localStorage.getItem('fluxur_session');
+
     if (savedUsers) {
       setRegisteredUsers(JSON.parse(savedUsers));
     }
-    if (savedChats) setChats(JSON.parse(savedChats));
+    if (savedChats) {
+      setChats(JSON.parse(savedChats));
+    }
+    if (savedSession) {
+      const user = JSON.parse(savedSession);
+      setCurrentUser(user);
+      setActiveView(FluxurView.CHATS);
+    }
   }, []);
+
+  // --- Persistence: Sync current session ---
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('fluxur_session', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('fluxur_session');
+    }
+  }, [currentUser]);
+
+  // --- Persistence: Sync chat history ---
+  useEffect(() => {
+    if (chats.length > 0) {
+      localStorage.setItem('fluxur_chats', JSON.stringify(chats));
+    }
+  }, [chats]);
 
   const lang = currentUser?.language || 'en';
   const t = (key: keyof typeof translations['en']) => (translations[lang] || translations['en'])[key] || key;
@@ -116,10 +142,6 @@ export default function App() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    localStorage.setItem('fluxur_chats', JSON.stringify(chats));
-  }, [chats]);
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
 
@@ -207,7 +229,8 @@ export default function App() {
         language: 'en',
         isBlocked: false
       };
-      saveUsersToStorage([...registeredUsers, { ...newUser, password: authForm.password }]);
+      const allUsers = [...registeredUsers, { ...newUser, password: authForm.password }];
+      saveUsersToStorage(allUsers);
       setCurrentUser(newUser);
       setActiveView(FluxurView.CHATS);
     } else {
@@ -580,11 +603,11 @@ export default function App() {
       {/* Sidebar Rail */}
       <nav className={`w-20 border-r flex flex-col items-center py-8 gap-6 shrink-0 ${activeChatId ? 'hidden md:flex' : 'flex'} ${currentUser?.theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-900 border-slate-800'}`}>
         <div className="w-12 h-12 cursor-pointer hover:scale-110 transition-transform mb-4" onClick={() => setActiveView(FluxurView.CHATS)}><ICONS.Logo /></div>
-        <button onClick={() => setActiveView(FluxurView.CHATS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.CHATS ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`}><ICONS.Message /></button>
-        <button onClick={() => setActiveView(FluxurView.PROFILE)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.PROFILE ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`}><ICONS.User /></button>
-        {isModerator && <button onClick={() => setActiveView(FluxurView.ADMIN)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.ADMIN ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/20' : 'text-slate-500 hover:text-amber-400'}`}><ICONS.Sparkles /></button>}
+        <button onClick={() => setActiveView(FluxurView.CHATS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.CHATS ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`} title={t('sidebar_chats')}><ICONS.Message /></button>
+        <button onClick={() => setActiveView(FluxurView.PROFILE)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.PROFILE ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`} title={t('sidebar_profile')}><ICONS.User /></button>
+        {isModerator && <button onClick={() => setActiveView(FluxurView.ADMIN)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.ADMIN ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/20' : 'text-slate-500 hover:text-amber-400'}`} title={t('sidebar_admin')}><ICONS.Sparkles /></button>}
         <div className="flex-1" />
-        <button onClick={() => setActiveView(FluxurView.SETTINGS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.SETTINGS ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`}><ICONS.Settings /></button>
+        <button onClick={() => setActiveView(FluxurView.SETTINGS)} className={`p-3 rounded-2xl transition-all ${activeView === FluxurView.SETTINGS ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`} title={t('sidebar_settings')}><ICONS.Settings /></button>
       </nav>
 
       <div className="flex-1 flex overflow-hidden">
